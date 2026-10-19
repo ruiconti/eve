@@ -42,8 +42,14 @@ describe("Discord setup", () => {
     const ctx = contexts(ANSWERS);
     const plan = await prepareDiscordSetup(ctx.prepare, effects);
     expect(effects.resolveApplication).not.toHaveBeenCalled();
-    await applyDiscordSetup(plan, ctx.apply, effects);
+    const completion = await applyDiscordSetup(plan, ctx.apply, effects);
     expect(effects.resolveApplication).toHaveBeenCalledWith("bot-token");
+    expect(completion.facts).toContainEqual({
+      kind: "url",
+      label: "Discord bot install URL",
+      value:
+        "https://discord.com/oauth2/authorize?client_id=app&scope=bot%20applications.commands&permissions=3072",
+    });
     expect(effects.writeTextFile).toHaveBeenCalledWith(
       "/project/agent/channels/discord.ts",
       expect.stringContaining("discord/agent"),

@@ -194,8 +194,8 @@ export async function applyDiscordSetup(
   const installUrl = `https://discord.com/oauth2/authorize?client_id=${encodeURIComponent(application.id)}&scope=${encodeURIComponent("bot applications.commands")}&permissions=${gateway ? GATEWAY_PERMISSIONS : COMMAND_PERMISSIONS}`;
   context.presenter.nextSteps([
     gateway
-      ? `Install the Discord application, then DM the bot, mention it, or try /${plan.commandName}: ${installUrl}`
-      : `Install the Discord application, then try /${plan.commandName}: ${installUrl}`,
+      ? `Install the bot from its install URL, then DM it, mention it, or try /${plan.commandName}.`
+      : `Install the bot from its install URL, then try /${plan.commandName}.`,
     ...(gateway
       ? [
           `Deploy to start the Gateway relay in ${DISCORD_DAEMON_ROOT}/. Daemons are in beta; run one instance per bot.`,
@@ -205,7 +205,9 @@ export async function applyDiscordSetup(
   ]);
   return {
     deploymentRequired: true as const,
+    // A fact, unlike a next step, stays visible after `/add` in `eve dev` collapses its panel.
     facts: [
+      { label: "Discord bot install URL", value: installUrl, kind: "url" as const },
       {
         label: "Discord application dashboard",
         value: `https://discord.com/developers/applications/${application.id}/information`,
