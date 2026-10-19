@@ -14,14 +14,18 @@ export const DISCORD_DAEMON_NAME = "discord-gateway";
 export const DISCORD_DAEMON_ROOT = "daemon";
 
 // Exactly one instance: each Gateway connection receives every message.
-const DISCORD_DAEMON = {
-  root: DISCORD_DAEMON_ROOT,
-  entrypoint: "Dockerfile",
-  instances: { iad1: 1 },
-};
+function discordDaemon(region: string) {
+  return { root: DISCORD_DAEMON_ROOT, entrypoint: "Dockerfile", instances: { [region]: 1 } };
+}
+
+/** Vercel's default function region, for projects that don't set one. */
+const DEFAULT_REGION = "iad1";
 
 /** The relay's files, by path relative to {@link DISCORD_DAEMON_ROOT}. */
-export function discordDaemonFiles(connectorUid: string): Readonly<Record<string, string>> {
+export function discordDaemonFiles(
+  connectorUid: string,
+  options: { readonly messageContent: boolean } = { messageContent: false },
+): Readonly<Record<string, string>> {
   const packageJson = {
     private: true,
     type: "module",
@@ -46,9 +50,9 @@ import { runDiscordGatewayRelay } from "eve/channels/discord/gateway";
 
 await runDiscordGatewayRelay({
   credentials: connectDiscordCredentials(${JSON.stringify(connectorUid)}),
-  // Set to true after enabling Message Content Intent under Bot in the Discord
-  // Developer Portal, so thread follow-ups that don't mention the bot arrive with their text.
-  messageContent: false,
+  // Lets thread follow-ups that don't mention the bot arrive with their text. Needs
+  // Message Content Intent under Bot in the Discord Developer Portal, or Discord refuses the relay.
+  messageContent: ${String(options.messageContent)},
   // Defaults to the project's production URL; set EVE_URL to relay to \`eve dev\`.
   url: process.env.EVE_URL,
 });
@@ -59,7 +63,7 @@ await runDiscordGatewayRelay({
 
 /** The `daemons` entry to add by hand to a project configured through `vercel.ts`. */
 export function discordDaemonEntry(): string {
-  return `daemons: ${JSON.stringify({ [DISCORD_DAEMON_NAME]: DISCORD_DAEMON })}`;
+  return `daemons: ${JSON.stringify({ [DISCORD_DAEMON_NAME]: discordDaemon(DEFAULT_REGION) })}`;
 }
 
 /**
@@ -86,7 +90,13 @@ export function withDiscordDaemon(vercelJson: string | undefined): string | unde
   }
   const daemons = isObject(config.daemons) ? config.daemons : {};
   if (daemons[DISCORD_DAEMON_NAME] !== undefined) return undefined;
-  return `${JSON.stringify({ ...config, daemons: { ...daemons, [DISCORD_DAEMON_NAME]: DISCORD_DAEMON } }, null, 2)}\n`;
+  // Run beside the project's functions, so forwarding stays in one region.
+  const region =
+    Array.isArray(config.regions) && typeof config.regions[0] === "string"
+      ? config.regions[0]
+      : DEFAULT_REGION;
+  const daemon = discordDaemon(region);
+  return `${JSON.stringify({ ...config, daemons: { ...daemons, [DISCORD_DAEMON_NAME]: daemon } }, null, 2)}\n`;
 }
 
 /** Reads a text file, or `undefined` when there is none. */

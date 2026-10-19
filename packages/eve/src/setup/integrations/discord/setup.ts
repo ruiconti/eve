@@ -12,6 +12,7 @@ import {
 } from "../types.js";
 import {
   configureDiscordInteractionsEndpoint,
+  enableDiscordMessageContentIntent,
   registerDiscordCommand,
   resolveDiscordApplication,
 } from "./api.js";
@@ -28,6 +29,7 @@ import {
 export interface DiscordSetupDeps {
   configureEndpoint: typeof configureDiscordInteractionsEndpoint;
   deriveConnectorSlug: typeof deriveSlackConnectorSlug;
+  enableMessageContent: typeof enableDiscordMessageContentIntent;
   provisionConnector: typeof provisionDiscordConnector;
   readTextFile: typeof readTextFile;
   registerCommand: typeof registerDiscordCommand;
@@ -38,6 +40,7 @@ export interface DiscordSetupDeps {
 const defaultDeps: DiscordSetupDeps = {
   configureEndpoint: configureDiscordInteractionsEndpoint,
   deriveConnectorSlug: deriveSlackConnectorSlug,
+  enableMessageContent: enableDiscordMessageContentIntent,
   provisionConnector: provisionDiscordConnector,
   readTextFile,
   registerCommand: registerDiscordCommand,
@@ -108,7 +111,8 @@ export async function prepareDiscordSetup(
           hint: "No long-running process",
         },
       ],
-      recommended: "gateway" as const,
+      // A beta, always-on daemon is a choice to make, not one for `--yes` to make silently.
+      recommended: "commands" as const,
       required: true,
     }),
   );
@@ -227,7 +231,17 @@ export async function applyDiscordSetup(
   );
   const facts: { label: string; value: string; kind?: "url" }[] = [];
   if (gateway !== undefined) {
-    for (const [path, content] of Object.entries(discordDaemonFiles(connector.uid))) {
+    // Without it, a thread's follow-ups arrive empty unless they mention the bot.
+    const messageContent = await deps.enableMessageContent(plan.botToken).catch(() => false);
+    if (!messageContent) {
+      facts.push({
+        label: "Enable Message Content",
+        value: `Discord didn't let setup turn on Message Content Intent, so thread follow-ups must mention the bot. Turn it on under Bot in the Discord Developer Portal, then set messageContent: true in ${DISCORD_DAEMON_ROOT}/main.ts.`,
+      });
+    }
+    for (const [path, content] of Object.entries(
+      discordDaemonFiles(connector.uid, { messageContent }),
+    )) {
       await deps.writeTextFile(join(context.projectRoot, DISCORD_DAEMON_ROOT, path), content, {
         force: context.force,
       });
@@ -252,7 +266,6 @@ export async function applyDiscordSetup(
     ...(gateway !== undefined
       ? [
           `Deploy to start the Gateway relay in ${DISCORD_DAEMON_ROOT}/. Daemons are in beta; run one instance per bot.`,
-          `To read thread follow-ups that don't mention the bot, enable Message Content Intent under Bot in the Discord Developer Portal, then set messageContent: true in ${DISCORD_DAEMON_ROOT}/main.ts.`,
         ]
       : []),
   ]);

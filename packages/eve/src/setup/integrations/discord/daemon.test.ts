@@ -16,7 +16,11 @@ describe("withDiscordDaemon", () => {
     const existing = JSON.stringify({ daemons: { worker: { root: "worker" } }, regions: ["sfo1"] });
 
     expect(JSON.parse(withDiscordDaemon(existing)!)).toEqual({
-      daemons: { "discord-gateway": DAEMON, worker: { root: "worker" } },
+      // The relay runs in the project's first function region.
+      daemons: {
+        "discord-gateway": { ...DAEMON, instances: { sfo1: 1 } },
+        worker: { root: "worker" },
+      },
       regions: ["sfo1"],
     });
   });

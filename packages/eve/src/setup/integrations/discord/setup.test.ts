@@ -18,10 +18,12 @@ const GATEWAY_ANSWERS = {
 };
 function deps(
   files: Record<string, string> = { "/project/vercel.json": '{ "framework": "eve" }' },
+  messageContentAllowed = true,
 ) {
   const effects: DiscordSetupDeps = {
     configureEndpoint: vi.fn(async () => {}),
     deriveConnectorSlug: vi.fn(async () => "agent" as never),
+    enableMessageContent: vi.fn(async () => messageContentAllowed),
     provisionConnector: vi.fn(async () => ({ id: "connector", uid: "discord/agent" })),
     readTextFile: vi.fn(async (path: string) => files[path]),
     registerCommand: vi.fn(async () => {}),
@@ -89,6 +91,9 @@ describe("Discord setup", () => {
     expect(written().get("/project/daemon/main.ts")).toContain(
       'runDiscordGatewayRelay({\n  credentials: connectDiscordCredentials("discord/agent")',
     );
+    // Setup turned the intent on, so thread follow-ups work without a mention.
+    expect(effects.enableMessageContent).toHaveBeenCalledWith("bot-token");
+    expect(written().get("/project/daemon/main.ts")).toContain("messageContent: true,");
     expect([...written().keys()]).toEqual(
       expect.arrayContaining([
         "/project/daemon/Dockerfile",
@@ -107,6 +112,18 @@ describe("Discord setup", () => {
       kind: "url",
       label: "Discord bot install URL",
       value: installUrl(String(1024 + 2048 + 65536 + 2 ** 35 + 2 ** 38)),
+    });
+  });
+
+  it("scaffolds the relay without Message Content and says how to fix it when Discord refuses", async () => {
+    const { effects, written } = deps(undefined, false);
+
+    const completion = await runSetup(GATEWAY_ANSWERS, effects);
+
+    expect(written().get("/project/daemon/main.ts")).toContain("messageContent: false,");
+    expect(completion.facts).toContainEqual({
+      label: "Enable Message Content",
+      value: expect.stringContaining("Discord Developer Portal"),
     });
   });
 
