@@ -318,7 +318,7 @@ Scale the production daemon to zero while you do this. Every connection receives
 
 ### Dispatch
 
-`onCommand(ctx, interaction)` decides whether to dispatch and under what `auth`. Return `{ auth }` to proceed, `null` to drop the interaction, or `title` alongside `auth` to set the title when the dispatch starts a run. By default, auth comes from the invoking user. The default principal is `discord:<userId>` in DMs and every server alike, so a person's connected accounts and approvals follow them between DMs and servers. The server, when there is one, is in the `guild_id` attribute.
+`onCommand(ctx, interaction)` decides whether to dispatch and under what `auth`. Return `{ auth }` to proceed, `null` to drop the interaction, or `title` alongside `auth` to set the title when the dispatch starts a run. By default, auth comes from the invoking user.
 
 The model-visible `<discord_context>` includes `user_id` and the receiving application's `application_id`.
 

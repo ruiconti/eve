@@ -71,12 +71,14 @@ Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}�
   session. Every message the bot posts, in any Discord session, aliases
   `<channelId>:<messageId>`, so both a button press and a Gateway reply find the session that
   posted it.
-- **Identity.** A person is `discord:<userId>` (issuer `discord`, authenticator
-  `discord-interaction`) in DMs and every server, for messages and interactions alike. Discord
-  user IDs are global, and DMs are now common, so a connected account or approval follows the
-  person everywhere; the guild stays an attribute. This drops the earlier guild-scoped
-  `discord:<guildId>:<userId>` form once, which orphans existing server principals. The
-  authenticator string is unchanged to avoid orphaning DM principals too.
+- **Identity.** Messages and interactions from the same person share a principal, including the
+  existing `discord-interaction` authenticator, so requester-only approvals asked by a message
+  accept that person's button press. Keeping the old authenticator string avoids orphaning
+  existing principals, pending approvals, and per-user tool sessions.
+- **Route auth.** The body asserts the author's identity, so the default is narrower than
+  ordinary route auth: `localDev()` plus Vercel OIDC from this project's runtime in the same
+  environment (`principalType: "runtime"`). A preview deployment cannot post to production. The relay signs with the project's OIDC token by default and forwards without
+  credentials when none exists, which `eve dev` accepts.
 - **Route contract.** The body is a raw Gateway dispatch, capped at 1 MB. Responses: `202`
   dispatched, `200 { accepted: false, reason }` ignored, `400` not JSON, `401` auth, `413` too
   large, `5xx` not dispatched (retryable). eve does not deduplicate.

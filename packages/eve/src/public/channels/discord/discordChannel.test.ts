@@ -243,7 +243,7 @@ describe("discordChannel() inbound route", () => {
     expect(input).toMatchObject({
       auth: {
         authenticator: "discord-interaction",
-        principalId: "discord:U01",
+        principalId: "discord:G01:U01",
       },
       state: {
         applicationId: "APP1",
@@ -339,7 +339,7 @@ describe("discordChannel() inbound route", () => {
       const { response, send } = await firePost(channel, press("U01"));
 
       await expect(response.json()).resolves.toEqual({ type: 6 });
-      expect(send).toHaveBeenCalledWith("C01:M01", answered("discord:U01"));
+      expect(send).toHaveBeenCalledWith("C01:M01", answered("discord:G01:U01"));
     });
 
     it("lets onInputResponse accept a press with ctx.defaultAuth or drop it", async () => {
@@ -352,7 +352,7 @@ describe("discordChannel() inbound route", () => {
       const accepted = await firePost(channel, press("U01"));
       const dropped = await firePost(channel, press("U02"));
 
-      expect(accepted.send).toHaveBeenCalledWith("C01:M01", answered("discord:U01"));
+      expect(accepted.send).toHaveBeenCalledWith("C01:M01", answered("discord:G01:U01"));
       expect(dropped.send).not.toHaveBeenCalled();
     });
 
@@ -866,7 +866,7 @@ describe("discordChannel() Gateway route", () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(token);
     expect(send.mock.calls[0]![1]).toMatchObject({
-      auth: { principalId: "discord:U01" },
+      auth: { principalId: "discord:G01:U01" },
       message: expect.stringMatching(/^(hello|and then\?)$/),
     });
   });
@@ -1100,7 +1100,7 @@ describe("discordChannel() Gateway route", () => {
 });
 
 describe("defaultDiscordAuth", () => {
-  it("gives a person one principal for server interactions and DMs", () => {
+  it("gives a person the same principal for messages and interactions", () => {
     const user = { id: "U01", isBot: false, username: "ada" };
     const fromInteraction = defaultDiscordAuth({
       applicationId: "APP1",
@@ -1115,8 +1115,9 @@ describe("defaultDiscordAuth", () => {
       addressed: true,
       attachments: [],
       author: user,
-      channelId: "D01",
+      channelId: "C02",
       content: "hi",
+      guildId: "G01",
       id: "M01",
       raw: {},
     });
@@ -1126,7 +1127,7 @@ describe("defaultDiscordAuth", () => {
     }
   });
 
-  it("keeps one principal across servers, with the guild as an attribute", () => {
+  it("derives guild-scoped user auth", () => {
     const auth = defaultDiscordAuth({
       applicationId: "APP1",
       channelId: "C01",
@@ -1145,7 +1146,7 @@ describe("defaultDiscordAuth", () => {
         user_id: "U01",
       },
       authenticator: "discord-interaction",
-      principalId: "discord:U01",
+      principalId: "discord:G01:U01",
       principalType: "user",
     });
   });
