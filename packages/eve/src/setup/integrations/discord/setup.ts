@@ -102,7 +102,7 @@ export async function prepareDiscordSetup(
           id: "gateway",
           value: "gateway" as const,
           label: "DMs, mentions, and threads",
-          hint: "Adds a Discord Gateway relay that runs as a Vercel Daemon (beta)",
+          hint: "Adds an experimental Discord Gateway relay that runs as a Vercel Daemon",
         },
         {
           id: "commands",
@@ -111,7 +111,7 @@ export async function prepareDiscordSetup(
           hint: "No long-running process",
         },
       ],
-      // A beta, always-on daemon is a choice to make, not one for `--yes` to make silently.
+      // An experimental, always-on relay is a choice to make, not one for `--yes` to make silently.
       recommended: "commands" as const,
       required: true,
     }),
@@ -265,7 +265,7 @@ export async function applyDiscordSetup(
       : "Install the bot from its install URL, then DM it or mention it in a channel.",
     ...(gateway !== undefined
       ? [
-          `Deploy to start the Gateway relay in ${DISCORD_DAEMON_ROOT}/. Daemons are in beta; run one instance per bot.`,
+          `Deploy to start the experimental Gateway relay in ${DISCORD_DAEMON_ROOT}/. Run one instance per bot.`,
         ]
       : []),
   ]);

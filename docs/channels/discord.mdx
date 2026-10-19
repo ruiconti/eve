@@ -27,7 +27,7 @@ The setup first asks how people should reach the agent: through **DMs, mentions,
 
 The slash command defaults to `/ask` with the description **Ask the eve agent**. You can edit both during setup. Discord global commands can take up to an hour to appear after registration. A bot that answers messages can take slash commands too: register one as described in [Configure Discord manually](#configure-discord-manually), and the channel handles it.
 
-In a non-interactive run, answer `discord-messages` with `"gateway"` for DMs, mentions, and threads, or `"commands"` for a slash command. `--yes` picks the slash command, because the relay is an always-on daemon in beta.
+In a non-interactive run, answer `discord-messages` with `"gateway"` for DMs, mentions, and threads, or `"commands"` for a slash command. `--yes` picks the slash command, because the relay is experimental and runs as an always-on Vercel Daemon.
 
 If your project configures Vercel in `vercel.ts`, setup leaves it alone and prints the `daemons` entry to add to it.
 
@@ -84,7 +84,7 @@ Vercel Connect is optional here too: without `credentials`, the channel reads `D
 
 ### Run the relay as a Vercel Daemon
 
-A Vercel Daemon keeps the relay connected. Daemons are in beta. When you choose to answer messages, `eve add channel/discord` writes these files for you. To add them yourself, put the relay in its own directory with the same credentials as the agent:
+A Vercel Daemon keeps the relay connected. Vercel Daemons are in beta. When you choose to answer messages, `eve add channel/discord` writes these files for you. To add them yourself, put the relay in its own directory with the same credentials as the agent:
 
 ```ts title="daemon/main.ts"
 import { connectDiscordCredentials } from "@vercel/connect/eve";
