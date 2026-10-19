@@ -4,7 +4,7 @@ description: "Reach your agent from Discord messages, DMs, and mentions, and fro
 type: integration
 ---
 
-The Discord channel wires your agent into Discord's HTTP Interactions, including slash and application commands, message components, and modal submissions. Discord enforces a three-second ACK deadline, so the channel acknowledges the command right away and runs the eve work in the background. Credentials and inbound request verification run through [Vercel Connect](../guides/auth-and-route-protection), so Discord's bot token stays out of your environment and Connect verifies Discord's signature before forwarding an interaction to eve. To also answer DMs and mentions, add a [Discord Gateway relay](#reply-to-dms-and-mentions). See [Channels](./overview) for the contract this builds on.
+The Discord channel wires your agent into Discord's HTTP Interactions, including slash and application commands, message components, and modal submissions. Discord enforces a three-second ACK deadline, so the channel acknowledges the command right away and runs the eve work in the background. Credentials and inbound request verification run through [Vercel Connect](../guides/auth-and-route-protection), so Discord's bot token stays out of your environment and Connect verifies Discord's signature before forwarding an interaction to eve. To also answer DMs and mentions, add a [Discord Gateway relay](#reply-to-dms-and-mentions-experimental). See [Channels](./overview) for the contract this builds on.
 
 ## Set up Discord
 
@@ -58,7 +58,7 @@ curl -X PUT "https://discord.com/api/v10/applications/$DISCORD_APPLICATION_ID/co
 
 Then configure the public `https://…/eve/v1/discord` route as the application's Interactions Endpoint URL. Pass `credentials: { applicationId, botToken, publicKey }` to `discordChannel`, or set the corresponding `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN`, and `DISCORD_PUBLIC_KEY` environment variables.
 
-## Reply to DMs and mentions
+## Reply to DMs and mentions (experimental)
 
 Discord sends ordinary messages, such as DMs, mentions, and thread replies, only over its [Gateway WebSocket](https://discord.com/developers/docs/events/gateway), not as HTTP Interactions. Gateway support is experimental, and its API may change. To receive them, run `experimental_runDiscordGatewayRelay` from `eve/channels/discord/gateway` in a process that stays connected, and enable the matching route on the channel. The relay forwards each `MESSAGE_CREATE` dispatch to the agent unchanged, and the channel replies through the same handlers it uses for commands, including HITL buttons and error messages.
 
