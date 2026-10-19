@@ -81,11 +81,12 @@ Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}�
   credentials when none exists, which `eve dev` accepts.
 - **Route contract.** The body is a raw Gateway dispatch, capped at 1 MB. Responses: `202`
   dispatched, `200 { accepted: false, reason }` ignored, `400` not JSON, `401` auth, `413` too
-  large, `5xx` not dispatched (retryable). eve does not deduplicate.
+  large, `429` rate limited (retryable), `5xx` unknown, since a platform timeout can follow a
+  dispatch. eve does not deduplicate.
 - **Relay.** Discovers the Gateway URL from `GET /gateway/bot`, identifies with the
   `GUILD_MESSAGES` and `DIRECT_MESSAGES` intents (plus `MESSAGE_CONTENT` on request), resumes
-  across reconnects, and forwards dispatches serially with a bounded backlog. It retries only
-  responses and connection errors that show eve never started the turn, never a timeout. It stops
+  across reconnects, and forwards dispatches serially with a bounded backlog. It retries only a
+  `429` or a connection that failed before the request reached eve, never a `5xx` or a timeout. It stops
   with `DiscordGatewayFatalError` on close codes that reconnecting cannot fix.
 
 ## Boundaries

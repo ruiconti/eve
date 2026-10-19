@@ -8,7 +8,8 @@ const MAX_PENDING = 500;
 const MAX_ATTEMPTS = 5;
 // Generous so a cold start answers before the relay gives up; a timed-out request is not retried.
 const REQUEST_TIMEOUT_MS = 30_000;
-const RETRYABLE_STATUSES = new Set([408, 409, 425, 429]);
+// Only a rate limit proves eve turned the request away; a 5xx can come after a turn started.
+const RATE_LIMITED = 429;
 // Failures that happen before the request reaches eve, so retrying cannot start a second turn.
 const UNSENT_ERROR_CODES = new Set([
   "ECONNREFUSED",
@@ -76,7 +77,16 @@ export function createForwarder(options: {
         if (response.ok) return;
 
         const detail = (await response.text()).slice(0, 200);
-        if (!RETRYABLE_STATUSES.has(response.status) && response.status < 500) {
+        if (response.status >= 500) {
+          // A gateway timeout or crash after dispatch would answer the message twice on retry.
+          log.error("Gave up forwarding a Discord dispatch that eve may have received", {
+            ...fields,
+            detail,
+            status: response.status,
+          });
+          return;
+        }
+        if (response.status !== RATE_LIMITED) {
           log.error("eve rejected a forwarded Discord dispatch", {
             ...fields,
             detail,

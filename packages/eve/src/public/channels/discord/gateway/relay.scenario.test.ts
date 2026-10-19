@@ -25,7 +25,11 @@ interface GatewayConnection {
  * Fake Discord, plus the eve route the relay forwards to, on one port. The
  * WebSocket side speaks just enough RFC 6455 for the relay's text frames.
  */
-async function startFakeDiscord(onConnection: (connection: GatewayConnection) => void): Promise<{
+async function startFakeDiscord(
+  onConnection: (connection: GatewayConnection) => void,
+  /** eve's answers to successive forwarded dispatches; 202 once they run out. */
+  eveStatuses: number[] = [],
+): Promise<{
   readonly url: string;
   readonly forwarded: { readonly body: unknown; readonly authorization?: string }[];
 }> {
@@ -41,7 +45,7 @@ async function startFakeDiscord(onConnection: (connection: GatewayConnection) =>
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         forwarded.push({ authorization: req.headers.authorization, body: JSON.parse(body) });
-        res.statusCode = 202;
+        res.statusCode = eveStatuses.shift() ?? 202;
         res.end("{}");
       });
       return;
@@ -245,6 +249,36 @@ describe("runDiscordGatewayRelay", () => {
     await relay;
 
     expect(connections[1]!.path).toMatch(/^\/resume\?/);
+  });
+
+  it("retries a rate limit but never a 5xx, which can come after eve started the turn", async () => {
+    let gateway: GatewayConnection | undefined;
+    const discord = await startFakeDiscord(
+      (connection) => {
+        gateway = connection;
+        connection.send(HELLO);
+      },
+      [429, 502],
+    );
+    const shutdown = new AbortController();
+    const relay = runDiscordGatewayRelay({
+      api: { apiBaseUrl: `${discord.url}/api/v10` },
+      credentials: { botToken: "bot-token" },
+      signal: shutdown.signal,
+      url: discord.url,
+    });
+
+    await waitFor(() => gateway?.received.length === 1);
+    gateway!.send(messageCreate(1, "M1"));
+    await waitFor(() => discord.forwarded.length === 2);
+    shutdown.abort();
+    // Shutdown drains the backlog, so a retry of the 502 would land before this resolves.
+    await relay;
+
+    expect(discord.forwarded.map(({ body }) => body)).toEqual([
+      messageCreate(1, "M1"),
+      messageCreate(1, "M1"),
+    ]);
   });
 
   it("stops with an actionable error when Discord refuses the bot's intents", async () => {

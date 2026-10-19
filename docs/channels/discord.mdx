@@ -286,16 +286,17 @@ The route accepts any relay that holds a Gateway connection, such as an existing
 
 The route handles `MESSAGE_CREATE` and acknowledges other dispatch types without acting on them. Authenticate the request as `gateway.auth` requires; by default, that is a Vercel OIDC token from the same project and environment. The relay needs the `GUILD_MESSAGES` (`1 << 9`) and `DIRECT_MESSAGES` (`1 << 12`) intents, plus `MESSAGE_CONTENT` (`1 << 15`) for messages that don't mention the bot. Use the response status to decide whether to retry:
 
-| Status | Meaning                                                                                    | Relay should                |
-| ------ | ------------------------------------------------------------------------------------------ | --------------------------- |
-| `202`  | A turn started. The body is `{ accepted: true, sessionId }`.                               | Stop.                       |
-| `200`  | Ignored on purpose. The body is `{ accepted: false, reason }`, for example `not_accepted`. | Stop.                       |
-| `400`  | The body is not JSON.                                                                      | Not retry.                  |
-| `401`  | Authentication failed.                                                                     | Fix credentials, not retry. |
-| `413`  | The body is over 1 MB.                                                                     | Not retry.                  |
-| `5xx`  | The message did not dispatch, for example because `onMessage` threw.                       | Retry with backoff.         |
+| Status | Meaning                                                                                                                                | Relay should                               |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `202`  | A turn started. The body is `{ accepted: true, sessionId }`.                                                                           | Stop.                                      |
+| `200`  | Ignored on purpose. The body is `{ accepted: false, reason }`, for example `not_accepted`.                                             | Stop.                                      |
+| `400`  | The body is not JSON.                                                                                                                  | Not retry.                                 |
+| `401`  | Authentication failed.                                                                                                                 | Fix credentials, not retry.                |
+| `413`  | The body is over 1 MB.                                                                                                                 | Not retry.                                 |
+| `429`  | Rate limited before the route ran.                                                                                                     | Retry with backoff.                        |
+| `5xx`  | Unknown. The route answers `500` before dispatch when `onMessage` throws, but a platform `502` or `504` can come after a turn started. | Not retry, unless your relay deduplicates. |
 
-eve does not deduplicate messages. If the relay retries after eve already started a turn, for example because the response was lost, the agent answers twice. `runDiscordGatewayRelay` retries only when the request never reached eve or eve answered `429` or `5xx`.
+eve does not deduplicate messages. If the relay retries after eve already started a turn, for example because the response was lost, the agent answers twice. `runDiscordGatewayRelay` retries only a `429`, or a connection that failed before the request reached eve.
 
 ### Run the relay locally
 
@@ -312,7 +313,7 @@ Scale the production daemon to zero while you do this. Every connection receives
 - Run one relay per bot. Each connection receives every message. Bots large enough to need Discord's sharding are out of scope.
 - Messages sent while the relay restarts, such as during a deploy, are not delivered.
 - A message can be answered twice when two relays briefly overlap, for example while a deploy runs the old and new daemon together.
-- `runDiscordGatewayRelay` drops a message, rather than retrying it, when eve takes longer than 30 seconds to accept it or the connection fails after the request is sent. eve may have started the turn already, and a retry could answer twice.
+- `runDiscordGatewayRelay` drops a message, rather than retrying it, when eve answers with a `5xx`, takes longer than 30 seconds to accept it, or the connection fails after the request is sent. eve may have started the turn already, and a retry could answer twice. The relay logs each dropped message.
 
 ## How the channel handles messages
 
