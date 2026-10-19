@@ -311,8 +311,7 @@ Scale the production daemon to zero while you do this. Every connection receives
 ### Limitations
 
 - Run one relay per bot. Each connection receives every message. Bots large enough to need Discord's sharding are out of scope.
-- Messages sent while the relay restarts, such as during a deploy, are not delivered.
-- A message can be answered twice when two relays briefly overlap, for example while a deploy runs the old and new daemon together.
+- Messages sent while no relay is connected are not delivered. On a deploy, Vercel sends `SIGTERM` to the old daemon and starts the new one at the same time. The old relay disconnects right away, so messages sent while the new daemon boots and connects, usually a few seconds, are lost. A crash or restart leaves the same gap. The relay does not resume the previous Gateway session in a new process, so Discord does not replay these messages.
 - `experimental_runDiscordGatewayRelay` drops a message, rather than retrying it, when eve answers with a `5xx`, takes longer than 30 seconds to accept it, or the connection fails after the request is sent. eve may have started the turn already, and a retry could answer twice. The relay logs each dropped message.
 
 ## How the channel handles messages

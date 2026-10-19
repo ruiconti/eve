@@ -1,7 +1,7 @@
 ---
 issue: https://github.com/vercel/eve/pull/4934
 status: implemented
-last_updated: "2026-10-15"
+last_updated: "2026-10-19"
 ---
 
 # Discord Gateway relay
@@ -94,5 +94,8 @@ Discord Gateway ──WS──▶ experimental_runDiscordGatewayRelay ──POST
 - The relay is a library, not generated code. Deployment wiring (Dockerfile, `vercel.json`
   `daemons`) stays in the app; `eve add channel/discord` could scaffold it later.
 - No deduplication. A Gateway sequence number identifies a dispatch only within one session, and
-  eve has no idempotent `send`, so overlapping relays during a deploy can answer twice.
+  eve has no idempotent `send`, so two relays connected at once, or a retry after eve started a turn,
+  can answer twice.
+- No cross-process resume. A deploy or restart starts a new Gateway session, so messages sent while
+  no relay is connected are lost. Handing the session cursor to the next process is a follow-up.
 - One relay per bot. Sharding is out of scope.
