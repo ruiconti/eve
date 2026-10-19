@@ -678,6 +678,52 @@ describe("discordChannel() default event handlers", () => {
     ]);
   });
 
+  it.each([
+    { name: "a DM shows the link in the open", audience: "private", link: true },
+    {
+      name: "a session with no known audience keeps the link behind a button",
+      audience: undefined,
+      link: false,
+    },
+  ])("posting a sign-in: $name", async ({ audience, link }) => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      Response.json({ channel_id: "C01", id: "M01" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = withState(
+      getAdapter(discordChannel({ credentials: { applicationId: "APP1", botToken: "bot-token" } })),
+      {
+        applicationId: "APP1",
+        audience,
+        channelId: "C01",
+        conversationId: "M00",
+        guildId: null,
+        hasMessageAnchor: true,
+        initialResponseSent: true,
+        interactionToken: null,
+      },
+    );
+
+    await callEvent(
+      adapter,
+      makeEvent("authorization.required", {
+        authorization: { url: "https://calendar.example/sign-in", userCode: "ABCD-1234" },
+        description: "Sign in to Calendar",
+        name: "calendar",
+        principalId: "discord:123",
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "t1",
+      }),
+      buildAdapterContext(adapter, captureAccessor("discord:C01:M00").accessor),
+    );
+
+    const posted = String(fetchMock.mock.calls[0]![1]!.body);
+    expect(posted.includes("https://calendar.example/sign-in")).toBe(link);
+    expect(posted.includes("ABCD-1234")).toBe(link);
+    expect(posted.includes('"label":"Sign in"')).toBe(!link);
+  });
+
   it("receive starts a proactive channel session", async () => {
     const channel = discordChannel({ credentials: { botToken: "bot-token" } });
     const send = vi.fn().mockResolvedValue({ id: "s1" });

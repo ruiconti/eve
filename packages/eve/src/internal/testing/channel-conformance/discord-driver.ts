@@ -308,6 +308,25 @@ export function discordDriver(
         text: (call.body as { readonly content?: string }).content ?? "",
       };
     },
+    shownReply(body) {
+      // A message answering an interaction; with the ephemeral flag, only the presser sees it.
+      const reply = body as {
+        readonly data?: {
+          readonly components?: unknown;
+          readonly content?: string;
+          readonly flags?: number;
+        };
+        readonly type?: number;
+      };
+      if (reply.type !== 4 || reply.data === undefined) return undefined;
+      return {
+        id: "",
+        links: linkTargets(reply.data.components),
+        onlyPerson: ((reply.data.flags ?? 0) & 64) !== 0,
+        options: [],
+        text: reply.data.content ?? "",
+      };
+    },
     personShownAs: [`<@${PERSON.id}>`, PERSON.username],
     press(option, person: Person) {
       const handle = option.handle as PressHandle;

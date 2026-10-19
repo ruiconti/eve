@@ -377,6 +377,12 @@ export default discordChannel({
 });
 ```
 
+### Connection sign-ins
+
+When a connection needs the person to sign in, the default `authorization.required` handler posts it to the conversation. In a DM, the message includes a link button to the sign-in page and any confirmation code. In a server, the shared message only says who has to sign in and has a **Sign in** button. When someone presses it, eve identifies them the same way it does for HITL presses (`onInputResponse`). If that's the person who has to sign in, eve answers with an ephemeral message holding the link and code, which only they can see. Anyone else gets an ephemeral note that they can't open it. That way another member can't finish the sign-in with their own account and have it saved under the requester's identity. Once the sign-in completes or is cancelled, eve edits the message to say so and removes its button.
+
+If `onCommand` or `gateway.onMessage` gives people principals other than the default, set `onInputResponse` to the same mapping. Otherwise eve can't match a press to the person who has to sign in, and nobody can open the sign-in in a server.
+
 ### Proactive sessions
 
 Start a session without an inbound interaction through `to(discord, target).send(message, { auth })` from a schedule `run` handler, or `ctx.to(discord, target).send(message, { auth })` from another channel. The proactive target shape is `{ channelId, conversationId?, initialMessage? }`. Either path needs a bot token, supplied by Connect or `DISCORD_BOT_TOKEN`.

@@ -16,6 +16,11 @@ import type {
   DiscordMessageResult,
 } from "#public/channels/discord/messages.js";
 import { renderInputRequestComponents } from "#public/channels/discord/hitl.js";
+import {
+  renderDiscordAuthorizationCompleted,
+  renderDiscordAuthorizationPrompt,
+  renderDiscordAuthorizationStatus,
+} from "#public/channels/discord/authorization.js";
 import type {
   DiscordChannelEvents,
   DiscordCommandResult,
@@ -120,9 +125,46 @@ export const defaultEvents: DiscordChannelEvents = {
     await channel.discord.startTyping();
   },
 
+  // In a DM the person signing in is the only one there, so the link goes in the open.
+  // Anywhere eve can't tell, such as a proactive session, the button keeps it private.
+  async "authorization.required"(event, channel, _ctx) {
+    const isDirectMessage =
+      channel.discord.guildId === undefined && channel.state.audience === "private";
+    const message = isDirectMessage
+      ? renderDiscordAuthorizationPrompt(event)
+      : renderDiscordAuthorizationStatus(event);
+    try {
+      const posted = await channel.discord.post(message);
+      if (posted.id) {
+        channel.state.pendingAuthMessageIds = {
+          ...channel.state.pendingAuthMessageIds,
+          [event.name]: posted.id,
+        };
+      }
+    } catch (error) {
+      log.error("Discord sign-in delivery failed", { error, name: event.name });
+    }
+  },
+
   async "authorization.completed"(event, channel, _ctx) {
     if (event.outcome === "authorized") {
       await channel.discord.startTyping();
+    }
+    const messageId = channel.state.pendingAuthMessageIds?.[event.name];
+    if (messageId === undefined) return;
+    const { [event.name]: _, ...rest } = channel.state.pendingAuthMessageIds ?? {};
+    channel.state.pendingAuthMessageIds = rest;
+    try {
+      const response = await channel.discord.request(
+        `/channels/${encodeURIComponent(channel.discord.channelId)}/messages/${encodeURIComponent(messageId)}`,
+        { components: [], content: renderDiscordAuthorizationCompleted(event) },
+        { botAuth: true, method: "PATCH" },
+      );
+      if (!response.ok) {
+        log.warn("Discord sign-in edit failed", { name: event.name, status: response.status });
+      }
+    } catch (error) {
+      log.warn("Discord sign-in edit failed", { error, name: event.name });
     }
   },
 
