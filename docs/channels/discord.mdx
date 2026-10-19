@@ -14,18 +14,22 @@ Run the guided setup from your eve project:
 pnpm eve add channel/discord
 ```
 
-The setup guides you through creating a Discord application and bot, then:
+The setup first asks how people should reach the agent: through **DMs, mentions, and threads**, or through **a slash command**. It then guides you through creating a Discord application and bot, and:
 
 - signs you in to Vercel and creates or links a project when needed;
 - validates the bot token;
 - creates a Vercel Connect client and attaches `/eve/v1/discord` as its trigger destination;
-- registers an application command with a required `message` option and an optional `file` attachment option;
-- configures the Discord application's Interactions Endpoint URL;
-- asks whether the agent should also answer DMs, mentions, and threads, and if so writes the [Gateway relay](#run-the-relay-as-a-vercel-daemon) in `daemon/` and registers it in `vercel.json`;
+- configures the Discord application's Interactions Endpoint URL, which buttons such as HITL choices and sign-ins use either way;
+- for DMs, mentions, and threads, writes the [Gateway relay](#run-the-relay-as-a-vercel-daemon) in `daemon/` and registers it in `vercel.json`;
+- for a slash command, registers it with a required `message` option and an optional `file` attachment option;
 - scaffolds the channel with Connect-managed credentials; and
-- prints the bot installation URL, with the thread permissions when the agent answers messages.
+- prints the bot installation URL.
 
-The command defaults to `/ask` with the description **Ask the eve agent**. You can edit both during setup. In a non-interactive run, answer `discord-messages` with `"gateway"` to answer messages too, or `"commands"` for slash commands only. Discord global commands can take up to an hour to appear after registration.
+The slash command defaults to `/ask` with the description **Ask the eve agent**. You can edit both during setup. Discord global commands can take up to an hour to appear after registration. A bot that answers messages can take slash commands too: register one as described in [Configure Discord manually](#configure-discord-manually), and the channel handles it.
+
+In a non-interactive run, answer `discord-messages` with `"gateway"` for DMs, mentions, and threads, or `"commands"` for a slash command.
+
+If your project configures Vercel in `vercel.ts`, setup leaves it alone and prints the `daemons` entry to add to it.
 
 The generated channel looks like this, plus `gateway: {}` when the agent answers messages:
 

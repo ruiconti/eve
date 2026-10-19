@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 
+import { isErrnoCode, isObject } from "#shared/guards.js";
 import { DEFAULT_CONNECT_PACKAGE_VERSION } from "#setup/scaffold/version-tokens.js";
 import {
   formatEveDependencySpecifier,
@@ -12,6 +12,13 @@ export const DISCORD_DAEMON_NAME = "discord-gateway";
 
 /** Directory of the relay, relative to the project root. */
 export const DISCORD_DAEMON_ROOT = "daemon";
+
+// Exactly one instance: each Gateway connection receives every message.
+const DISCORD_DAEMON = {
+  root: DISCORD_DAEMON_ROOT,
+  entrypoint: "Dockerfile",
+  instances: { iad1: 1 },
+};
 
 /** The relay's files, by path relative to {@link DISCORD_DAEMON_ROOT}. */
 export function discordDaemonFiles(connectorUid: string): Readonly<Record<string, string>> {
@@ -50,6 +57,11 @@ await runDiscordGatewayRelay({
   };
 }
 
+/** The `daemons` entry to add by hand to a project configured through `vercel.ts`. */
+export function discordDaemonEntry(): string {
+  return `daemons: ${JSON.stringify({ [DISCORD_DAEMON_NAME]: DISCORD_DAEMON })}`;
+}
+
 /**
  * `vercel.json` with the relay's daemon added, given its current contents or
  * `undefined` when there is none. Returns `undefined` when a daemon of the same
@@ -64,30 +76,25 @@ export function withDiscordDaemon(vercelJson: string | undefined): string | unde
     } catch {
       throw new Error("vercel.json contains invalid JSON; fix it, then run the setup again.");
     }
-    if (!isRecord(parsed)) throw new Error("vercel.json must contain a JSON object.");
+    if (!isObject(parsed)) throw new Error("vercel.json must contain a JSON object.");
     config = parsed;
   }
-  const daemons = isRecord(config.daemons) ? config.daemons : {};
+  if (config.daemons !== undefined && !isObject(config.daemons)) {
+    throw new Error(
+      "vercel.json has a `daemons` value that isn't an object; fix it, then run the setup again.",
+    );
+  }
+  const daemons = isObject(config.daemons) ? config.daemons : {};
   if (daemons[DISCORD_DAEMON_NAME] !== undefined) return undefined;
-  // Exactly one instance: each Gateway connection receives every message.
-  daemons[DISCORD_DAEMON_NAME] = {
-    root: DISCORD_DAEMON_ROOT,
-    entrypoint: "Dockerfile",
-    instances: { iad1: 1 },
-  };
-  return `${JSON.stringify({ ...config, daemons }, null, 2)}\n`;
+  return `${JSON.stringify({ ...config, daemons: { ...daemons, [DISCORD_DAEMON_NAME]: DISCORD_DAEMON } }, null, 2)}\n`;
 }
 
-/** Reads `vercel.json` at the project root, or `undefined` when there is none. */
-export async function readVercelJson(projectRoot: string): Promise<string | undefined> {
+/** Reads a text file, or `undefined` when there is none. */
+export async function readTextFile(path: string): Promise<string | undefined> {
   try {
-    return await readFile(join(projectRoot, "vercel.json"), "utf8");
+    return await readFile(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (isErrnoCode(error, "ENOENT")) return undefined;
     throw error;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

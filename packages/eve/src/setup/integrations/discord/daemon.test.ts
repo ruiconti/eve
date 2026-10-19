@@ -27,6 +27,12 @@ describe("withDiscordDaemon", () => {
     expect(withDiscordDaemon(existing)).toBeUndefined();
   });
 
+  it("refuses a daemons value it would have to replace", () => {
+    expect(() => withDiscordDaemon(JSON.stringify({ daemons: ["worker"] }))).toThrow(
+      "`daemons` value that isn't an object",
+    );
+  });
+
   it("refuses a vercel.json it can't parse instead of overwriting it", () => {
     expect(() => withDiscordDaemon("{ nope")).toThrow("vercel.json contains invalid JSON");
   });
