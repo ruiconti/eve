@@ -829,7 +829,7 @@ describe("discordChannel() Gateway route", () => {
 
   it.each([
     {
-      name: "a mention in a channel starts a new session keyed by the message",
+      name: "without threads, a mention in a channel starts a new session keyed by the message",
       message: {},
       activeTokens: [],
       token: "C01:M01",
@@ -847,7 +847,7 @@ describe("discordChannel() Gateway route", () => {
       token: "C01:B01",
     },
     {
-      name: "a reply to a bot message no session owns starts a new session",
+      name: "without threads, a reply to a bot message no session owns starts a new session",
       message: {
         content: "and then?",
         mentions: [],
@@ -859,7 +859,7 @@ describe("discordChannel() Gateway route", () => {
       token: "C01:M01",
     },
   ])("$name", async ({ message, activeTokens, token }) => {
-    const { channel } = gatewayChannel({ channelType: 0 });
+    const { channel } = gatewayChannel({ channelType: 0, gateway: { startThread: false } });
 
     const { send } = await fireGateway(channel, messageCreate(message), { activeTokens });
 
@@ -887,8 +887,8 @@ describe("discordChannel() Gateway route", () => {
         path: new URL(String(input)).pathname,
       }));
 
-    it("answers a mention in a new thread that holds the session", async () => {
-      const { channel, discordFetch } = gatewayChannel({ gateway: { startThread: true } });
+    it("answers a mention in a new thread that holds the session by default", async () => {
+      const { channel, discordFetch } = gatewayChannel();
 
       const { send } = await fireGateway(
         channel,
@@ -998,6 +998,7 @@ describe("discordChannel() Gateway route", () => {
           auth: defaultDiscordMessageAuth(message),
           context: [`addressed: ${message.addressed}`],
           conversation: `user:${message.author.id}`,
+          startThread: false,
         }),
       },
     });

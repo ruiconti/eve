@@ -107,9 +107,9 @@ export type DiscordMessageResult = {
    * reply it is. `"channel"` is one session for the whole channel. Any other
    * string is your own grouping, such as `` `user:${message.author.id}` ``.
    *
-   * Defaults to `"channel"` in DMs and threads; elsewhere, to the replied-to
-   * message's session when one owns it, or else a new session keyed by this
-   * message.
+   * Defaults to `"channel"` in DMs and threads, which includes the thread a
+   * text-channel mention starts; elsewhere, to the replied-to message's session
+   * when one owns it, or else a new session keyed by this message.
    */
   readonly conversation?: string;
   /**
@@ -119,7 +119,7 @@ export type DiscordMessageResult = {
    * replies that continue a session are left as they are. eve adds the author
    * to the thread. When Discord refuses, for example because the bot lacks the
    * Create Public Threads permission, the message is handled as if
-   * `startThread` were unset. Defaults to `gateway.startThread`.
+   * `startThread` were `false`. Defaults to `gateway.startThread`.
    */
   readonly startThread?: boolean | DiscordStartThreadOptions;
 } | null;
@@ -146,9 +146,10 @@ export interface DiscordGatewayConfig {
    */
   onMessage?(ctx: DiscordContext, message: DiscordGatewayMessage): DiscordMessageResultOrPromise;
   /**
-   * Default for each accepted message's `startThread`, so the bot answers a
-   * mention in a text channel in a new thread. An `onMessage` result's own
-   * `startThread` overrides it.
+   * Default for each accepted message's `startThread`. Defaults to `true`, so
+   * the bot answers a mention in a text channel in a new thread; set `false`
+   * to answer in the channel, where replies continue the conversation. An
+   * `onMessage` result's own `startThread` overrides it.
    */
   readonly startThread?: boolean | DiscordStartThreadOptions;
 }
@@ -233,7 +234,7 @@ export function createDiscordGatewayRoute(input: {
       const explicitConversation = isNonEmptyString(result.conversation)
         ? result.conversation
         : undefined;
-      const startThread = result.startThread ?? gateway.startThread ?? false;
+      const startThread = result.startThread ?? gateway.startThread ?? true;
       state.conversationId = await routeMessage();
 
       // Picks the session, and moves the message's replies into a new thread when asked.

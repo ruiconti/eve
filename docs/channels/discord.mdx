@@ -191,14 +191,16 @@ The relay stops on `SIGTERM` after delivering what it has in flight. It exits wi
 
 By default the channel answers a message when it is a DM, mentions the bot, replies to one of the bot's messages, or arrives in a thread where the bot already has a conversation. It strips the bot's mention from the text, and it never answers messages from bots, including its own. Messages group into sessions this way:
 
-| Message                              | Session                                        |
-| ------------------------------------ | ---------------------------------------------- |
-| A DM                                 | One per DM channel                             |
-| A message in a thread                | One per thread                                 |
-| A mention in a text channel          | A new session                                  |
-| A reply to the bot in a text channel | The session that posted the replied-to message |
+| Message                              | Session                                                                                |
+| ------------------------------------ | -------------------------------------------------------------------------------------- |
+| A DM                                 | One per DM channel                                                                     |
+| A message in a thread                | One per thread                                                                         |
+| A mention in a text channel          | A new [thread](#reply-in-threads) started from the message, one session for the thread |
+| A reply to the bot in a text channel | The session that posted the replied-to message                                         |
 
-In a text channel, a mention starts a conversation and a reply continues it, so two people, or one person's unrelated questions, don't share context. Every message the bot posts continues its session when someone replies to it, including slash command responses. A reply to a bot message that no live session owns starts a new session.
+A mention in a text channel starts a thread, as the Slack channel does, so each conversation stays out of the channel and two people, or one person's unrelated questions, don't share context. Every message the bot posts continues its session when someone replies to it, including slash command responses in the channel. A reply to a bot message that no live session owns starts a new thread.
+
+Mention the bot's user, not the role with the same name that Discord creates for it. Discord's autocomplete offers both, and a role mention doesn't address the bot.
 
 Discord sends the text of messages that neither mention the bot nor arrive as a DM only to bots with the privileged **Message Content** intent. Without it, thread follow-ups that skip the mention, and replies whose author turned off the reply ping, arrive empty and are ignored. To request the intent, enable **Message Content Intent** under **Bot** in the Discord Developer Portal, then pass `messageContent: true` to `runDiscordGatewayRelay`. Discord refuses the relay's connection if you request the intent before enabling it, and the relay stops with an error naming the close code.
 
@@ -234,7 +236,9 @@ export default discordChannel({
 
 ### Reply in threads
 
-To answer a mention in a text channel in a new thread, as the Slack channel does, set `gateway.startThread`:
+By default, the bot answers a mention in a text channel in a new thread. The channel starts a public thread from the person's message, named after its first line, and adds the person to it. The thread holds one session, so later messages in it continue the conversation. Threads apply only to messages that would start a new session in a text channel. DMs, messages already in a thread, and replies that continue a session stay where they are. If Discord refuses to create the thread, for example because the bot lacks **Create Public Threads**, the bot answers in the channel instead.
+
+To answer in the channel instead, set `gateway.startThread` to `false`. A mention then starts a session in the channel, and replies to the bot's messages continue it:
 
 ```ts title="agent/channels/discord.ts"
 import { connectDiscordCredentials } from "@vercel/connect/eve";
@@ -242,13 +246,11 @@ import { discordChannel } from "eve/channels/discord";
 
 export default discordChannel({
   credentials: connectDiscordCredentials("discord/my-agent"),
-  gateway: { startThread: true },
+  gateway: { startThread: false },
 });
 ```
 
-The channel starts a public thread from the person's message, named after its first line, and adds the person to it. The thread holds one session, so later messages in it continue the conversation. `startThread` applies only to messages that would start a new session in a text channel. DMs, messages already in a thread, and replies that continue a session stay where they are. If Discord refuses to create the thread, for example because the bot lacks **Create Public Threads**, the bot answers in the channel instead.
-
-`onMessage` can decide per message by returning `startThread`, which overrides `gateway.startThread`. Return `false` to answer in the channel, or options to name the thread and set how long Discord waits before archiving it:
+`onMessage` can decide per message by returning `startThread`, which overrides `gateway.startThread`. Return `false` to answer in the channel, `true` for a thread, or options to name the thread and set how long Discord waits before archiving it:
 
 ```ts
 import { defaultDiscordMessageAuth, discordChannel } from "eve/channels/discord";
