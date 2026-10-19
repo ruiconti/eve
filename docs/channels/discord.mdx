@@ -75,7 +75,7 @@ export default discordChannel({
 });
 ```
 
-Vercel Connect is optional here too: without `credentials`, the channel reads `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, and the relay reads `DISCORD_BOT_TOKEN`. Pass `gateway.auth` to accept a relay that runs elsewhere, and `gateway.route` to change the path. Whoever passes `gateway.auth` can send messages as any Discord user, so keep it as narrow as the default.
+Vercel Connect is optional here too: without `credentials`, the channel reads `DISCORD_APPLICATION_ID` and `DISCORD_BOT_TOKEN`, and the relay reads `DISCORD_BOT_TOKEN`. Pass `gateway.auth` to accept a relay that [runs outside Vercel](#run-the-relay-outside-vercel), and `gateway.route` to change the path. Whoever passes `gateway.auth` can send messages as any Discord user, so keep it as narrow as the default.
 
 ### Run the relay as a Vercel Daemon
 
@@ -137,6 +137,55 @@ The bot needs the **Send Messages in Threads** permission to reply in threads, i
 ```text
 https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot+applications.commands&permissions=309237713920
 ```
+
+### Run the relay outside Vercel
+
+`runDiscordGatewayRelay` runs on any host that keeps a Node.js 24 process up, such as a VM, a container platform, or a home server, while the agent stays on Vercel. Run exactly one relay per bot. Three things change off Vercel:
+
+- **Credentials.** Vercel Connect authenticates callers with your project's Vercel OIDC token, which other hosts don't have, so give the relay the bot token directly. The agent can keep using Connect.
+- **URL.** The relay can't read `VERCEL_PROJECT_PRODUCTION_URL`, so pass the agent's URL as `url`.
+- **Auth.** The route's default auth accepts only your Vercel project's own runtime. Use a shared secret instead: `basic()` from `eve/agents/auth` signs the relay's requests, and `httpBasic()` on `gateway.auth` checks them.
+
+Generate a long random secret, for example with `openssl rand -hex 32`, and set it as `DISCORD_RELAY_SECRET` on both the agent's Vercel project and the relay's host. On the agent:
+
+```ts title="agent/channels/discord.ts"
+import { connectDiscordCredentials } from "@vercel/connect/eve";
+import { httpBasic, localDev } from "eve/channels/auth";
+import { discordChannel } from "eve/channels/discord";
+
+export default discordChannel({
+  credentials: connectDiscordCredentials("discord/my-agent"),
+  gateway: {
+    auth: [
+      localDev(),
+      httpBasic({ username: "discord-relay", password: process.env.DISCORD_RELAY_SECRET! }),
+    ],
+  },
+});
+```
+
+On the relay, set `DISCORD_BOT_TOKEN` to the token from **Bot** → **Reset Token** in the Discord Developer Portal, and `EVE_URL` to the agent's production URL:
+
+```ts title="relay/main.ts"
+import { basic } from "eve/agents/auth";
+import { runDiscordGatewayRelay } from "eve/channels/discord/gateway";
+
+await runDiscordGatewayRelay({
+  // Reads DISCORD_BOT_TOKEN when `credentials` is omitted.
+  url: process.env.EVE_URL,
+  auth: basic({ username: "discord-relay", password: process.env.DISCORD_RELAY_SECRET! }),
+});
+```
+
+The relay's `package.json` needs only `eve`. Build the image from the same Dockerfile as the [daemon](#run-the-relay-as-a-vercel-daemon), then run it with a restart policy so a crash or host reboot brings it back:
+
+```bash
+docker run -d --restart unless-stopped \
+  -e DISCORD_BOT_TOKEN -e DISCORD_RELAY_SECRET -e EVE_URL=https://my-agent.vercel.app \
+  discord-relay
+```
+
+The relay stops on `SIGTERM` after delivering what it has in flight. It exits with an error when Discord refuses the bot token or intents, and restarting it won't help until you fix the configuration. If Deployment Protection covers the URL the relay posts to, create a Protection Bypass for Automation secret, and pass `auth` a function that returns the Basic `authorization` header together with an `x-vercel-protection-bypass` header carrying that secret.
 
 ### Who the bot answers
 
