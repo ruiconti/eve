@@ -739,12 +739,20 @@ function messageCreate(message: Record<string, unknown> = {}): Record<string, un
 function gatewayChannel(
   options: {
     readonly channelType?: number;
+    readonly threadCreation?: "ok" | "refused";
     readonly gateway?: DiscordGatewayConfig;
   } = {},
 ) {
-  const discordFetch = vi.fn<typeof fetch>(async () =>
-    Response.json({ id: "C01", type: options.channelType ?? 0 }),
-  );
+  const discordFetch = vi.fn<typeof fetch>(async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/threads")) {
+      return options.threadCreation === "refused"
+        ? Response.json({ message: "Missing Permissions" }, { status: 403 })
+        : Response.json({ id: "T01", type: 11 });
+    }
+    if (path.includes("/thread-members/")) return new Response(null, { status: 204 });
+    return Response.json({ id: "C01", type: options.channelType ?? 0 });
+  });
   const channel = discordChannel({
     api: { fetch: discordFetch },
     credentials: { applicationId: "APP1", botToken: "bot-token" },
@@ -869,6 +877,80 @@ describe("discordChannel() Gateway route", () => {
     const { send } = await fireGateway(channel, messageCreate());
 
     expect(send.mock.calls[0]![0]).toBe("C01:channel");
+  });
+
+  describe("startThread", () => {
+    const calls = (discordFetch: ReturnType<typeof gatewayChannel>["discordFetch"]) =>
+      discordFetch.mock.calls.map(([input, init]) => ({
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        method: init?.method,
+        path: new URL(String(input)).pathname,
+      }));
+
+    it("answers a mention in a new thread that holds the session", async () => {
+      const { channel, discordFetch } = gatewayChannel({ gateway: { startThread: true } });
+
+      const { send } = await fireGateway(
+        channel,
+        messageCreate({ content: "<@APP1> Plan the launch\nwith details" }),
+      );
+
+      expect(calls(discordFetch)).toEqual([
+        { body: undefined, method: "GET", path: "/api/v10/channels/C01" },
+        {
+          body: { name: "Plan the launch" },
+          method: "POST",
+          path: "/api/v10/channels/C01/messages/M01/threads",
+        },
+        { body: undefined, method: "PUT", path: "/api/v10/channels/T01/thread-members/U01" },
+      ]);
+      const [token, input] = send.mock.calls[0]!;
+      expect(token).toBe("T01:channel");
+      expect(input).toMatchObject({ state: { channelId: "T01", conversationId: "channel" } });
+    });
+
+    it("lets onMessage start a thread with options or opt out of the default", async () => {
+      const { channel, discordFetch } = gatewayChannel({
+        gateway: {
+          startThread: true,
+          onMessage: (_ctx, message) => ({
+            auth: defaultDiscordMessageAuth(message),
+            startThread: message.content.startsWith("quick")
+              ? false
+              : { autoArchiveMinutes: 60, name: "Support" },
+          }),
+        },
+      });
+
+      const quick = await fireGateway(channel, messageCreate({ content: "<@APP1> quick one" }));
+      const threaded = await fireGateway(channel, messageCreate({ id: "M02" }));
+
+      expect(quick.send.mock.calls[0]![0]).toBe("C01:M01");
+      expect(threaded.send.mock.calls[0]![0]).toBe("T01:channel");
+      expect(calls(discordFetch)).toContainEqual({
+        body: { auto_archive_duration: 60, name: "Support" },
+        method: "POST",
+        path: "/api/v10/channels/C01/messages/M02/threads",
+      });
+    });
+
+    it.each([
+      { name: "a message already in a thread", channelType: 11, token: "C01:channel" },
+      { name: "a refused thread creation", threadCreation: "refused" as const, token: "C01:M01" },
+    ])(
+      "answers where the message is after $name",
+      async ({ channelType, threadCreation, token }) => {
+        const { channel } = gatewayChannel({
+          channelType,
+          gateway: { startThread: true },
+          threadCreation,
+        });
+
+        const { send } = await fireGateway(channel, messageCreate());
+
+        expect(send.mock.calls[0]![0]).toBe(token);
+      },
+    );
   });
 
   it("continues a thread conversation without a mention", async () => {

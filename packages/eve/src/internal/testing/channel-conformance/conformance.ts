@@ -163,6 +163,23 @@ const DISCORD_BROKEN = {
   ),
 };
 
+/** Gateway messages are plain text, so they reach rules interactions can't. */
+const DISCORD_GATEWAY_BROKEN = {
+  ...DISCORD_BROKEN,
+  ...unnamedAnsweredPrompts(UNNAMED_RESPONDER, ["approvalText", "questionText"]),
+  ...noSignInRenderer("message after ignored sign-in tells user it was cancelled"),
+};
+
+/** In a server, a person continues by replying to the bot's message, and there is none for a sign-in. */
+const DISCORD_GATEWAY_SHARED_BROKEN = {
+  ...DISCORD_GATEWAY_BROKEN,
+  "message after ignored sign-in gets an answer, signing in late doesn't run": {
+    reason:
+      "the channel shows no sign-in, so the person's next message has nothing to reply to and starts a new session, leaving the sign-in open",
+    symptom: /read_calendar ran after its sign-in was cancelled/u,
+  },
+};
+
 const SIGN_IN_PRESS_RULE = "someone else pressing a sign-in isn't shown its link or code";
 
 /** The challenge goes privately to the person signing in, so the thread has no sign-in to press. */
@@ -171,8 +188,12 @@ const SIGN_IN_SENT_PRIVATELY = {
     "the sign-in goes privately to the person signing in, so the thread shows nothing to press",
 } satisfies Partial<Record<ContractRuleName, string>>;
 
-const DISCORD_UNSUPPORTED = {
+const DISCORD_GATEWAY_UNSUPPORTED = {
   [SIGN_IN_PRESS_RULE]: "the channel shows no sign-in, so there's nothing to press",
+} satisfies Partial<Record<ContractRuleName, string>>;
+
+const DISCORD_UNSUPPORTED = {
+  ...DISCORD_GATEWAY_UNSUPPORTED,
   "a file sent earlier in the conversation is still there on a later message":
     "each slash command starts its own session, so no later message shares one with the file",
 } satisfies Partial<Record<ContractRuleName, string>>;
@@ -228,13 +249,31 @@ const channelConformance = {
     { driver: chatSdkTextDriver },
   ],
   "chat-sdk-dm": [{ dm: true, driver: () => chatSdkDriver("private"), broken: CHAT_SDK_BROKEN }],
-  discord: [{ driver: discordDriver, broken: DISCORD_BROKEN, unsupported: DISCORD_UNSUPPORTED }],
+  discord: [
+    { driver: () => discordDriver(), broken: DISCORD_BROKEN, unsupported: DISCORD_UNSUPPORTED },
+    {
+      driver: () => discordDriver("shared", "gateway"),
+      broken: DISCORD_GATEWAY_SHARED_BROKEN,
+      unsupported: DISCORD_GATEWAY_UNSUPPORTED,
+    },
+    {
+      driver: () => discordDriver("shared", "gateway-threads"),
+      broken: DISCORD_GATEWAY_BROKEN,
+      unsupported: DISCORD_GATEWAY_UNSUPPORTED,
+    },
+  ],
   "discord-dm": [
     {
       dm: true,
       driver: () => discordDriver("private"),
       broken: DISCORD_BROKEN,
       unsupported: DISCORD_UNSUPPORTED,
+    },
+    {
+      dm: true,
+      driver: () => discordDriver("private", "gateway"),
+      broken: DISCORD_GATEWAY_BROKEN,
+      unsupported: DISCORD_GATEWAY_UNSUPPORTED,
     },
   ],
   github: [

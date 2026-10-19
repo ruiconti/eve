@@ -75,6 +75,17 @@ export interface DiscordGatewayMessage {
   readonly raw: Record<string, unknown>;
 }
 
+/** Minutes of inactivity before Discord archives a thread; the values Discord accepts. */
+export type DiscordThreadAutoArchiveMinutes = 60 | 1440 | 4320 | 10080;
+
+/** Options for starting a thread from a message; see {@link DiscordMessageResult.startThread}. */
+export interface DiscordStartThreadOptions {
+  /** Thread name. Defaults to the message's first line, then its first attachment's filename. */
+  readonly name?: string;
+  /** Defaults to the channel's own setting. */
+  readonly autoArchiveMinutes?: DiscordThreadAutoArchiveMinutes;
+}
+
 /**
  * Result of the Gateway message hook. Return `null` to ignore the message.
  * - `auth`: session auth context for the dispatched turn, or `null` for anonymous.
@@ -82,6 +93,8 @@ export interface DiscordGatewayMessage {
  * - `title`: workflow run title override that does not change model input.
  * - `conversation`: which session in the channel the message joins; see
  *   {@link DiscordMessageResult.conversation}.
+ * - `startThread`: answer in a new thread off the message; see
+ *   {@link DiscordMessageResult.startThread}.
  */
 export type DiscordMessageResult = {
   readonly auth: SessionAuthContext | null;
@@ -99,6 +112,16 @@ export type DiscordMessageResult = {
    * message.
    */
   readonly conversation?: string;
+  /**
+   * Starts a thread from the message and moves the conversation into it, as
+   * one session for the thread. Applies only when the message would start a
+   * new session in a text channel: DMs, messages already in a thread, and
+   * replies that continue a session are left as they are. eve adds the author
+   * to the thread. When Discord refuses, for example because the bot lacks the
+   * Create Public Threads permission, the message is handled as if
+   * `startThread` were unset. Defaults to `gateway.startThread`.
+   */
+  readonly startThread?: boolean | DiscordStartThreadOptions;
 } | null;
 
 /** Sync or async {@link DiscordMessageResult}. */
@@ -122,6 +145,12 @@ export interface DiscordGatewayConfig {
    * with `defaultDiscordMessageAuth` and the default `conversation`.
    */
   onMessage?(ctx: DiscordContext, message: DiscordGatewayMessage): DiscordMessageResultOrPromise;
+  /**
+   * Default for each accepted message's `startThread`, so the bot answers a
+   * mention in a text channel in a new thread. An `onMessage` result's own
+   * `startThread` overrides it.
+   */
+  readonly startThread?: boolean | DiscordStartThreadOptions;
 }
 
 /** Mounts the route that turns forwarded `MESSAGE_CREATE` dispatches into turns. */
@@ -201,24 +230,47 @@ export function createDiscordGatewayRoute(input: {
       }
       if (result === null) return ignored("not_accepted");
 
-      state.conversationId = isNonEmptyString(result.conversation)
+      const explicitConversation = isNonEmptyString(result.conversation)
         ? result.conversation
-        : await defaultConversation();
+        : undefined;
+      const startThread = result.startThread ?? gateway.startThread ?? false;
+      state.conversationId = await routeMessage();
 
-      async function defaultConversation(): Promise<string> {
-        if (isDirectMessage || channelSession !== undefined) return WHOLE_CHANNEL_CONVERSATION;
-        const replyTo = message.referencedMessageId;
-        if (
-          replyTo !== undefined &&
-          (await resolveSession(discordContinuationToken(message.channelId, replyTo))) !== undefined
-        ) {
-          return replyTo;
+      // Picks the session, and moves the message's replies into a new thread when asked.
+      async function routeMessage(): Promise<string> {
+        if (isDirectMessage || channelSession !== undefined) {
+          return explicitConversation ?? WHOLE_CHANNEL_CONVERSATION;
+        }
+        if (explicitConversation === undefined) {
+          const replyTo = message.referencedMessageId;
+          if (
+            replyTo !== undefined &&
+            (await resolveSession(discordContinuationToken(message.channelId, replyTo))) !==
+              undefined
+          ) {
+            return replyTo;
+          }
+        } else if (startThread === false) {
+          return explicitConversation;
         }
         const channelType = await lookUpChannelType(config, message.channelId);
         if (channelType !== undefined) state.audience = discordAudience(channelType);
-        return channelType !== undefined && THREAD_CHANNEL_TYPES.has(channelType)
-          ? WHOLE_CHANNEL_CONVERSATION
-          : message.id;
+        if (channelType !== undefined && THREAD_CHANNEL_TYPES.has(channelType)) {
+          return explicitConversation ?? WHOLE_CHANNEL_CONVERSATION;
+        }
+        if (startThread !== false) {
+          const threadId = await startThreadFrom(
+            config,
+            message,
+            startThread === true ? {} : startThread,
+          );
+          if (threadId !== undefined) {
+            state.channelId = threadId;
+            state.audience = "unknown";
+            return explicitConversation ?? WHOLE_CHANNEL_CONVERSATION;
+          }
+        }
+        return explicitConversation ?? message.id;
       }
 
       const contextBlock = formatDiscordContextBlock({
@@ -230,7 +282,7 @@ export function createDiscordGatewayRoute(input: {
         username: message.author.username,
       });
       const session = await from(
-        discordContinuationToken(message.channelId, state.conversationId),
+        discordContinuationToken(state.channelId ?? message.channelId, state.conversationId),
       ).send(discordCommandContent(content, message.attachments), {
         auth: result.auth,
         context: [contextBlock, ...(result.context ?? [])],
@@ -306,6 +358,63 @@ function stripMention(content: string, applicationId: string): string {
     .replaceAll(`<@${applicationId}>`, "")
     .replaceAll(`<@!${applicationId}>`, "")
     .trim();
+}
+
+const DISCORD_THREAD_NAME_MAX_LENGTH = 100;
+
+/**
+ * Starts a public thread from `message` and adds its author, returning the
+ * thread's channel id, or `undefined` when Discord refuses.
+ */
+async function startThreadFrom(
+  config: DiscordChannelConfig,
+  message: DiscordGatewayMessage,
+  options: DiscordStartThreadOptions,
+): Promise<string | undefined> {
+  const name =
+    options.name?.trim() ||
+    message.content.split("\n", 1)[0]?.trim() ||
+    message.attachments[0]?.filename ||
+    "Conversation";
+  const body: Record<string, string | number> = {
+    name: name.slice(0, DISCORD_THREAD_NAME_MAX_LENGTH),
+  };
+  if (options.autoArchiveMinutes !== undefined) {
+    body.auto_archive_duration = options.autoArchiveMinutes;
+  }
+  try {
+    const botToken = await resolveDiscordBotToken(config.credentials?.botToken);
+    const api = { apiBaseUrl: config.api?.apiBaseUrl, botToken, fetch: config.api?.fetch };
+    const created = await callDiscordApi({
+      ...api,
+      body,
+      path: `/channels/${encodeURIComponent(message.channelId)}/messages/${encodeURIComponent(message.id)}/threads`,
+    });
+    const threadId = isObject(created.body) ? created.body.id : undefined;
+    if (!created.ok || !isNonEmptyString(threadId)) {
+      log.warn("Discord thread creation failed; answering in the channel", {
+        channelId: message.channelId,
+        status: created.status,
+      });
+      return undefined;
+    }
+    // Starting a thread adds only the bot, so its replies would not reach the author.
+    const added = await callDiscordApi({
+      ...api,
+      method: "PUT",
+      path: `/channels/${encodeURIComponent(threadId)}/thread-members/${encodeURIComponent(message.author.id)}`,
+    });
+    if (!added.ok) {
+      log.warn("Adding the author to a Discord thread failed", { status: added.status, threadId });
+    }
+    return threadId;
+  } catch (error) {
+    log.warn("Discord thread creation failed; answering in the channel", {
+      channelId: message.channelId,
+      error,
+    });
+    return undefined;
+  }
 }
 
 /** Gateway messages omit the channel type, which tells a thread from a channel. */

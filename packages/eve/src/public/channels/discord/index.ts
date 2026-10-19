@@ -100,6 +100,8 @@ export type {
   DiscordGatewayMessage,
   DiscordMessageResult,
   DiscordMessageResultOrPromise,
+  DiscordStartThreadOptions,
+  DiscordThreadAutoArchiveMinutes,
 } from "#public/channels/discord/messages.js";
 
 export {

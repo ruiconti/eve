@@ -59,6 +59,10 @@ Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}�
   return `conversation` to choose the key instead, such as `user:<userId>` for one session per
   person. Gateway messages omit the channel type, so the route looks it up only when the
   default needs it.
+- **Threads.** `startThread` in an `onMessage` result, or `gateway.startThread` as the default,
+  starts a public thread from a message that would open a new session in a text channel, adds
+  the author, and keys the session `<threadId>:channel`. DMs, thread messages, and replies that
+  continue a session are untouched, and a refused creation falls back to the channel.
 - **Delivery.** Gateway sessions have no interaction token, so `channel.discord.post()` sends
   channel messages. They start with `hasMessageAnchor: true`, so replies never re-key the
   session. Every message the bot posts, in any Discord session, aliases

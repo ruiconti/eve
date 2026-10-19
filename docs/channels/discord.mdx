@@ -132,10 +132,10 @@ Register the daemon in `vercel.json` with exactly one instance:
 
 On Vercel, the relay sends messages to `https://$VERCEL_PROJECT_PRODUCTION_URL` and signs each request with the project's Vercel OIDC token, so the agent and relay need no shared secret. Set `url` to send them elsewhere.
 
-The bot needs the **Send Messages in Threads** permission to reply in threads, in addition to **View Channels** and **Send Messages**. This install URL grants all three plus **Read Message History**; replace `<APPLICATION_ID>`:
+The bot needs the **Send Messages in Threads** permission to reply in threads, in addition to **View Channels** and **Send Messages**, and **Create Public Threads** to [start threads](#reply-in-threads). This install URL grants all four plus **Read Message History**; replace `<APPLICATION_ID>`:
 
 ```text
-https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot+applications.commands&permissions=274877975552
+https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot+applications.commands&permissions=309237713920
 ```
 
 ### Who the bot answers
@@ -178,6 +178,43 @@ export default discordChannel({
     onMessage: (_ctx, message) =>
       message.addressed
         ? { auth: defaultDiscordMessageAuth(message), conversation: `user:${message.author.id}` }
+        : null,
+  },
+});
+```
+
+### Reply in threads
+
+To answer a mention in a text channel in a new thread, as the Slack channel does, set `gateway.startThread`:
+
+```ts title="agent/channels/discord.ts"
+import { connectDiscordCredentials } from "@vercel/connect/eve";
+import { discordChannel } from "eve/channels/discord";
+
+export default discordChannel({
+  credentials: connectDiscordCredentials("discord/my-agent"),
+  gateway: { startThread: true },
+});
+```
+
+The channel starts a public thread from the person's message, named after its first line, and adds the person to it. The thread holds one session, so later messages in it continue the conversation. `startThread` applies only to messages that would start a new session in a text channel. DMs, messages already in a thread, and replies that continue a session stay where they are. If Discord refuses to create the thread, for example because the bot lacks **Create Public Threads**, the bot answers in the channel instead.
+
+`onMessage` can decide per message by returning `startThread`, which overrides `gateway.startThread`. Return `false` to answer in the channel, or options to name the thread and set how long Discord waits before archiving it:
+
+```ts
+import { defaultDiscordMessageAuth, discordChannel } from "eve/channels/discord";
+
+export default discordChannel({
+  gateway: {
+    onMessage: (_ctx, message) =>
+      message.addressed
+        ? {
+            auth: defaultDiscordMessageAuth(message),
+            startThread: message.attachments.length > 0 && {
+              name: `Review: ${message.attachments[0]!.filename}`,
+              autoArchiveMinutes: 1440,
+            },
+          }
         : null,
   },
 });
