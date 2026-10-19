@@ -9,12 +9,14 @@ const ANSWERS = {
   "discord-bot-token": " bot-token ",
   "discord-command-name": "ask",
   "discord-command-description": "Ask the eve agent",
+  "discord-messages": "commands",
 };
 function deps(): DiscordSetupDeps {
   return {
     configureEndpoint: vi.fn(async () => {}),
     deriveConnectorSlug: vi.fn(async () => "agent" as never),
     provisionConnector: vi.fn(async () => ({ id: "connector", uid: "discord/agent" })),
+    readVercelJson: vi.fn(async () => '{ "framework": "eve" }'),
     registerCommand: vi.fn(async () => {}),
     resolveApplication: vi.fn(async () => ({ id: "app", name: "Agent", publicKey: "key" })),
     writeTextFile: vi.fn(async () => {}),
@@ -47,6 +49,32 @@ describe("Discord setup", () => {
       expect.stringContaining("discord/agent"),
       { force: undefined },
     );
+  });
+  it("scaffolds the Gateway relay when the agent should answer messages", async () => {
+    const effects = deps();
+    const ctx = contexts({ ...ANSWERS, "discord-messages": "gateway" });
+    await applyDiscordSetup(await prepareDiscordSetup(ctx.prepare, effects), ctx.apply, effects);
+
+    const written = new Map(
+      vi.mocked(effects.writeTextFile).mock.calls.map(([path, content]) => [path, content]),
+    );
+    expect(written.get("/project/agent/channels/discord.ts")).toContain("gateway: {},");
+    expect(written.get("/project/daemon/main.ts")).toContain(
+      'runDiscordGatewayRelay({\n  credentials: connectDiscordCredentials("discord/agent")',
+    );
+    expect([...written.keys()]).toEqual(
+      expect.arrayContaining([
+        "/project/daemon/Dockerfile",
+        "/project/daemon/package.json",
+        "/project/daemon/.dockerignore",
+      ]),
+    );
+    expect(JSON.parse(written.get("/project/vercel.json")!)).toEqual({
+      daemons: {
+        "discord-gateway": { entrypoint: "Dockerfile", instances: { iad1: 1 }, root: "daemon" },
+      },
+      framework: "eve",
+    });
   });
   it("refuses missing input before mutation", async () => {
     const effects = deps();

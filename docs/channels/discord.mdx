@@ -21,12 +21,13 @@ The setup guides you through creating a Discord application and bot, then:
 - creates a Vercel Connect client and attaches `/eve/v1/discord` as its trigger destination;
 - registers an application command with a required `message` option and an optional `file` attachment option;
 - configures the Discord application's Interactions Endpoint URL;
+- asks whether the agent should also answer DMs, mentions, and threads, and if so writes the [Gateway relay](#run-the-relay-as-a-vercel-daemon) in `daemon/` and registers it in `vercel.json`;
 - scaffolds the channel with Connect-managed credentials; and
-- prints the bot installation URL.
+- prints the bot installation URL, with the thread permissions when the agent answers messages.
 
-The command defaults to `/ask` with the description **Ask the eve agent**. You can edit both during setup. Discord global commands can take up to an hour to appear after registration.
+The command defaults to `/ask` with the description **Ask the eve agent**. You can edit both during setup. In a non-interactive run, answer `discord-messages` with `"gateway"` to answer messages too, or `"commands"` for slash commands only. Discord global commands can take up to an hour to appear after registration.
 
-The generated channel looks like this:
+The generated channel looks like this, plus `gateway: {}` when the agent answers messages:
 
 ```ts title="agent/channels/discord.ts"
 import { connectDiscordCredentials } from "@vercel/connect/eve";
@@ -79,7 +80,7 @@ Vercel Connect is optional here too: without `credentials`, the channel reads `D
 
 ### Run the relay as a Vercel Daemon
 
-A Vercel Daemon keeps the relay connected. Daemons are in beta. Put the relay in its own directory with the same credentials as the agent:
+A Vercel Daemon keeps the relay connected. Daemons are in beta. When you choose to answer messages, `eve add channel/discord` writes these files for you. To add them yourself, put the relay in its own directory with the same credentials as the agent:
 
 ```ts title="daemon/main.ts"
 import { connectDiscordCredentials } from "@vercel/connect/eve";
@@ -87,6 +88,7 @@ import { experimental_runDiscordGatewayRelay } from "eve/channels/discord/gatewa
 
 await experimental_runDiscordGatewayRelay({
   credentials: connectDiscordCredentials("discord/my-agent"),
+  messageContent: false,
   url: process.env.EVE_URL,
 });
 ```
@@ -102,14 +104,14 @@ await experimental_runDiscordGatewayRelay({
 }
 ```
 
-Run `npm install` in `daemon/` to create the `package-lock.json` the image installs from:
+The image installs from `package-lock.json` too, if you commit one in `daemon/`:
 
 ```dockerfile title="daemon/Dockerfile"
 FROM node:24-slim
 WORKDIR /app
 ENV NODE_ENV=production
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package*.json ./
+RUN npm install --omit=dev --no-audit --no-fund
 COPY main.ts ./
 USER node
 CMD ["node", "main.ts"]
@@ -119,7 +121,6 @@ Register the daemon in `vercel.json` with exactly one instance:
 
 ```json title="vercel.json"
 {
-  "framework": "eve",
   "daemons": {
     "discord-gateway": {
       "root": "daemon",

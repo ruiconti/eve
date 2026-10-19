@@ -1,0 +1,33 @@
+import { describe, expect, it } from "vitest";
+
+import { withDiscordDaemon } from "./daemon.js";
+
+const DAEMON = { entrypoint: "Dockerfile", instances: { iad1: 1 }, root: "daemon" };
+
+describe("withDiscordDaemon", () => {
+  it("creates vercel.json with the daemon when there is none", () => {
+    expect(JSON.parse(withDiscordDaemon(undefined)!)).toEqual({
+      $schema: "https://openapi.vercel.sh/vercel.json",
+      daemons: { "discord-gateway": DAEMON },
+    });
+  });
+
+  it("adds the daemon beside the project's own settings and daemons", () => {
+    const existing = JSON.stringify({ daemons: { worker: { root: "worker" } }, regions: ["sfo1"] });
+
+    expect(JSON.parse(withDiscordDaemon(existing)!)).toEqual({
+      daemons: { "discord-gateway": DAEMON, worker: { root: "worker" } },
+      regions: ["sfo1"],
+    });
+  });
+
+  it("leaves a vercel.json that already has the daemon untouched", () => {
+    const existing = JSON.stringify({ daemons: { "discord-gateway": { root: "relay" } } });
+
+    expect(withDiscordDaemon(existing)).toBeUndefined();
+  });
+
+  it("refuses a vercel.json it can't parse instead of overwriting it", () => {
+    expect(() => withDiscordDaemon("{ nope")).toThrow("vercel.json contains invalid JSON");
+  });
+});
