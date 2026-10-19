@@ -222,7 +222,7 @@ export interface DiscordChannelConfig {
 
   /**
    * Accepts ordinary messages (DMs, mentions, and thread follow-ups) that a
-   * relay forwards from the Discord Gateway, such as `runDiscordGatewayRelay`
+   * relay forwards from the Discord Gateway, such as `experimental_runDiscordGatewayRelay`
    * from `eve/channels/discord/gateway`. Mounts `POST /eve/v1/discord/gateway`.
    */
   readonly gateway?: DiscordGatewayConfig;

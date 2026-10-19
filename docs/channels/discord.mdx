@@ -4,7 +4,7 @@ description: "Reach your agent from Discord messages, DMs, and mentions, and fro
 type: integration
 ---
 
-The Discord channel wires your agent into Discord's HTTP Interactions, including slash and application commands, message components, and modal submissions. Discord enforces a three-second ACK deadline, so the channel acknowledges the command right away and runs the eve work in the background. Credentials and inbound request verification run through [Vercel Connect](../guides/auth-and-route-protection), so Discord's bot token stays out of your environment and Connect verifies Discord's signature before forwarding an interaction to eve. To also answer DMs and mentions, add a [Discord Gateway relay](#reply-to-dms-and-mentions). See [Channels](./overview) for the contract this builds on.
+The Discord channel wires your agent into Discord's HTTP Interactions, including slash and application commands, message components, and modal submissions. Discord enforces a three-second ACK deadline, so the channel acknowledges the command right away and runs the eve work in the background. Credentials and inbound request verification run through [Vercel Connect](../guides/auth-and-route-protection), so Discord's bot token stays out of your environment and Connect verifies Discord's signature before forwarding an interaction to eve. To also answer DMs and mentions, add a [Discord Gateway relay](#reply-to-dms-and-mentions-experimental). See [Channels](./overview) for the contract this builds on.
 
 ## Set up Discord
 
@@ -53,9 +53,9 @@ curl -X PUT "https://discord.com/api/v10/applications/$DISCORD_APPLICATION_ID/co
 
 Then configure the public `https://…/eve/v1/discord` route as the application's Interactions Endpoint URL. Pass `credentials: { applicationId, botToken, publicKey }` to `discordChannel`, or set the corresponding `DISCORD_APPLICATION_ID`, `DISCORD_BOT_TOKEN`, and `DISCORD_PUBLIC_KEY` environment variables.
 
-## Reply to DMs and mentions
+## Reply to DMs and mentions (experimental)
 
-Discord sends ordinary messages, such as DMs, mentions, and thread replies, only over its [Gateway WebSocket](https://discord.com/developers/docs/events/gateway), not as HTTP Interactions. Gateway support is experimental, and its API may change. To receive them, run `runDiscordGatewayRelay` from `eve/channels/discord/gateway` in a process that stays connected, and enable the matching route on the channel. The relay forwards each `MESSAGE_CREATE` dispatch to the agent unchanged, and the channel replies through the same handlers it uses for commands, including HITL buttons and error messages.
+Discord sends ordinary messages, such as DMs, mentions, and thread replies, only over its [Gateway WebSocket](https://discord.com/developers/docs/events/gateway), not as HTTP Interactions. Gateway support is experimental, and its API may change. To receive them, run `experimental_runDiscordGatewayRelay` from `eve/channels/discord/gateway` in a process that stays connected, and enable the matching route on the channel. The relay forwards each `MESSAGE_CREATE` dispatch to the agent unchanged, and the channel replies through the same handlers it uses for commands, including HITL buttons and error messages.
 
 ```text
 Discord Gateway ── WebSocket ──▶ relay (Vercel Daemon) ── POST /eve/v1/discord/gateway ──▶ agent ── REST ──▶ Discord
@@ -83,9 +83,9 @@ A Vercel Daemon keeps the relay connected. Daemons are in beta. Put the relay in
 
 ```ts title="daemon/main.ts"
 import { connectDiscordCredentials } from "@vercel/connect/eve";
-import { runDiscordGatewayRelay } from "eve/channels/discord/gateway";
+import { experimental_runDiscordGatewayRelay } from "eve/channels/discord/gateway";
 
-await runDiscordGatewayRelay({
+await experimental_runDiscordGatewayRelay({
   credentials: connectDiscordCredentials("discord/my-agent"),
   url: process.env.EVE_URL,
 });
@@ -140,7 +140,7 @@ https://discord.com/oauth2/authorize?client_id=<APPLICATION_ID>&scope=bot+applic
 
 ### Run the relay outside Vercel
 
-`runDiscordGatewayRelay` runs on any host that keeps a Node.js 24 process up, such as a VM, a container platform, or a home server, while the agent stays on Vercel. Run exactly one relay per bot. Three things change off Vercel:
+`experimental_runDiscordGatewayRelay` runs on any host that keeps a Node.js 24 process up, such as a VM, a container platform, or a home server, while the agent stays on Vercel. Run exactly one relay per bot. Three things change off Vercel:
 
 - **Credentials.** Vercel Connect authenticates callers with your project's Vercel OIDC token, which other hosts don't have, so give the relay the bot token directly. The agent can keep using Connect.
 - **URL.** The relay can't read `VERCEL_PROJECT_PRODUCTION_URL`, so pass the agent's URL as `url`.
@@ -168,9 +168,9 @@ On the relay, set `DISCORD_BOT_TOKEN` to the token from **Bot** → **Reset Toke
 
 ```ts title="relay/main.ts"
 import { basic } from "eve/agents/auth";
-import { runDiscordGatewayRelay } from "eve/channels/discord/gateway";
+import { experimental_runDiscordGatewayRelay } from "eve/channels/discord/gateway";
 
-await runDiscordGatewayRelay({
+await experimental_runDiscordGatewayRelay({
   // Reads DISCORD_BOT_TOKEN when `credentials` is omitted.
   url: process.env.EVE_URL,
   auth: basic({ username: "discord-relay", password: process.env.DISCORD_RELAY_SECRET! }),
@@ -202,7 +202,7 @@ A mention in a text channel starts a thread, as the Slack channel does, so each 
 
 Mention the bot's user, not the role with the same name that Discord creates for it. Discord's autocomplete offers both, and a role mention doesn't address the bot.
 
-Discord sends the text of messages that neither mention the bot nor arrive as a DM only to bots with the privileged **Message Content** intent. Without it, thread follow-ups that skip the mention, and replies whose author turned off the reply ping, arrive empty and are ignored. To request the intent, enable **Message Content Intent** under **Bot** in the Discord Developer Portal, then pass `messageContent: true` to `runDiscordGatewayRelay`. Discord refuses the relay's connection if you request the intent before enabling it, and the relay stops with an error naming the close code.
+Discord sends the text of messages that neither mention the bot nor arrive as a DM only to bots with the privileged **Message Content** intent. Without it, thread follow-ups that skip the mention, and replies whose author turned off the reply ping, arrive empty and are ignored. To request the intent, enable **Message Content Intent** under **Bot** in the Discord Developer Portal, then pass `messageContent: true` to `experimental_runDiscordGatewayRelay`. Discord refuses the relay's connection if you request the intent before enabling it, and the relay stops with an error naming the close code.
 
 To choose which messages run the agent, under what `auth`, or which session they join, set `gateway.onMessage(ctx, message)`. It runs for every message from a person and returns `{ auth }` to dispatch or `null` to ignore. `message.addressed` reports whether the default would answer, and `message.referencedMessageId` names the message it replies to. `defaultDiscordMessageAuth(message)` gives the author the same principal `defaultDiscordAuth` gives them for commands and button presses, so requester-only approvals work across both:
 
@@ -273,7 +273,7 @@ export default discordChannel({
 
 ### Forward messages from your own relay
 
-The route accepts any relay that holds a Gateway connection, such as an existing discord.js bot, so you don't have to run `runDiscordGatewayRelay`. Forward each Gateway dispatch payload unchanged, as the JSON body of a `POST` to `/eve/v1/discord/gateway`:
+The route accepts any relay that holds a Gateway connection, such as an existing discord.js bot, so you don't have to run `experimental_runDiscordGatewayRelay`. Forward each Gateway dispatch payload unchanged, as the JSON body of a `POST` to `/eve/v1/discord/gateway`:
 
 ```json
 {
@@ -296,7 +296,7 @@ The route handles `MESSAGE_CREATE` and acknowledges other dispatch types without
 | `429`  | Rate limited before the route ran.                                                                                                     | Retry with backoff.                        |
 | `5xx`  | Unknown. The route answers `500` before dispatch when `onMessage` throws, but a platform `502` or `504` can come after a turn started. | Not retry, unless your relay deduplicates. |
 
-eve does not deduplicate messages. If the relay retries after eve already started a turn, for example because the response was lost, the agent answers twice. `runDiscordGatewayRelay` retries only a `429`, or a connection that failed before the request reached eve.
+eve does not deduplicate messages. If the relay retries after eve already started a turn, for example because the response was lost, the agent answers twice. `experimental_runDiscordGatewayRelay` retries only a `429`, or a connection that failed before the request reached eve.
 
 ### Run the relay locally
 
@@ -313,7 +313,7 @@ Scale the production daemon to zero while you do this. Every connection receives
 - Run one relay per bot. Each connection receives every message. Bots large enough to need Discord's sharding are out of scope.
 - Messages sent while the relay restarts, such as during a deploy, are not delivered.
 - A message can be answered twice when two relays briefly overlap, for example while a deploy runs the old and new daemon together.
-- `runDiscordGatewayRelay` drops a message, rather than retrying it, when eve answers with a `5xx`, takes longer than 30 seconds to accept it, or the connection fails after the request is sent. eve may have started the turn already, and a retry could answer twice. The relay logs each dropped message.
+- `experimental_runDiscordGatewayRelay` drops a message, rather than retrying it, when eve answers with a `5xx`, takes longer than 30 seconds to accept it, or the connection fails after the request is sent. eve may have started the turn already, and a retry could answer twice. The relay logs each dropped message.
 
 ## How the channel handles messages
 

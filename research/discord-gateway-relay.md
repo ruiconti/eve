@@ -26,7 +26,7 @@ export default discordChannel({
 });
 
 // daemon/main.ts, run as a Vercel Daemon
-await runDiscordGatewayRelay({
+await experimental_runDiscordGatewayRelay({
   credentials: connectDiscordCredentials("discord/my-agent"),
   // url?, route?, auth?, messageContent?, signal?, api?
 });
@@ -44,7 +44,7 @@ envelope, and leaves room for more dispatch types without a format change. Docs 
 say "Discord Gateway" so it does not read as Vercel AI Gateway.
 
 ```text
-Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}──▶ discordChannel gateway route
+Discord Gateway ──WS──▶ experimental_runDiscordGatewayRelay ──POST {op,t,s,d}──▶ discordChannel gateway route
                          (one instance, OIDC)                        ──REST──▶ Discord
 ```
 
