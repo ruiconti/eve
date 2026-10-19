@@ -402,7 +402,11 @@ describe("discordChannel() inbound route", () => {
         };
       };
       const prompt = {
-        body: { components: [], content: "Approve?\n\nNo longer active" },
+        body: {
+          allowed_mentions: { parse: [] },
+          components: [],
+          content: "Approve?\n\nNo longer active",
+        },
         method: "PATCH",
         url: "https://discord.com/api/v10/channels/C01/messages/M01",
       };
@@ -679,13 +683,22 @@ describe("discordChannel() default event handlers", () => {
   });
 
   it.each([
-    { name: "a DM shows the link in the open", audience: "private", link: true },
     {
-      name: "a session with no known audience keeps the link behind a button",
-      audience: undefined,
+      name: "a 1:1 DM shows the link in the open",
+      where: { audience: "private", directMessage: true },
+      link: true,
+    },
+    {
+      name: "a group DM keeps the link behind a button",
+      where: { audience: "private" },
       link: false,
     },
-  ])("posting a sign-in: $name", async ({ audience, link }) => {
+    {
+      name: "a session with no known audience keeps the link behind a button",
+      where: {},
+      link: false,
+    },
+  ])("posting a sign-in: $name", async ({ where, link }) => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       Response.json({ channel_id: "C01", id: "M01" }),
     );
@@ -693,8 +706,8 @@ describe("discordChannel() default event handlers", () => {
     const adapter = withState(
       getAdapter(discordChannel({ credentials: { applicationId: "APP1", botToken: "bot-token" } })),
       {
+        ...where,
         applicationId: "APP1",
-        audience,
         channelId: "C01",
         conversationId: "M00",
         guildId: null,

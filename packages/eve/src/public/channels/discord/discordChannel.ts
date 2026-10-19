@@ -13,7 +13,6 @@ import type { UnstampedMessageStreamEvent } from "#protocol/message.js";
 import {
   callDiscordApi,
   createDiscordFollowupMessage,
-  DISCORD_NO_MENTIONS,
   discordContinuationToken,
   editDiscordOriginalResponse,
   resolveDiscordBotToken,
@@ -119,8 +118,10 @@ export interface DiscordChannelState {
   hasMessageAnchor: boolean;
   /** Posted prompts with components, keyed by requestId, until eve resolves them. */
   hitlPrompts?: Record<string, DiscordHitlPrompt>;
-  /** Each pending sign-in's message, keyed by connection name, until the sign-in settles. */
+  /** Each pending sign-in's message, keyed by sign-in attempt, until the sign-in settles. */
   pendingAuthMessageIds?: Record<string, string>;
+  /** Whether the conversation is a 1:1 DM with the bot, where nobody else can see a sign-in. */
+  directMessage?: boolean;
 }
 
 /** What a posted prompt needs so its message can be edited once eve resolves it. */
@@ -579,7 +580,7 @@ async function handleInteraction(input: {
   if (input.interaction.type === DISCORD_INTERACTION_TYPE.MESSAGE_COMPONENT) {
     const reveal = readDiscordAuthorizationReveal(input.interaction.customId);
     if (reveal !== null) {
-      return await revealAuthorization({ ...input, interaction: input.interaction, reveal });
+      return revealAuthorization({ ...input, interaction: input.interaction, reveal });
     }
   }
   if (input.interaction.type === DISCORD_INTERACTION_TYPE.APPLICATION_COMMAND) {
@@ -649,28 +650,40 @@ async function handleCommandInteraction(input: {
 
 /**
  * Answers a sign-in button press with an ephemeral message, identifying the
- * presser the same way a HITL press does.
+ * presser the same way a HITL press does. Finding the sign-in reads the
+ * session's stream, so the press is acknowledged first, as an ephemeral
+ * deferred response, to stay inside Discord's 3-second deadline.
  */
-async function revealAuthorization(input: {
+function revealAuthorization(input: {
   readonly config: DiscordChannelConfig;
   readonly interaction: DiscordComponentInteraction;
   readonly onInputResponse: NonNullable<DiscordChannelConfig["onInputResponse"]>;
   readonly resolveSession: ChannelResolveSession;
   readonly reveal: DiscordAuthorizationReveal;
-}): Promise<Response> {
+  readonly waitUntil: (task: Promise<unknown>) => void;
+}): Response {
+  input.waitUntil(answerRevealedAuthorization(input));
+  return discordDeferredJson(true);
+}
+
+async function answerRevealedAuthorization(input: {
+  readonly config: DiscordChannelConfig;
+  readonly interaction: DiscordComponentInteraction;
+  readonly onInputResponse: NonNullable<DiscordChannelConfig["onInputResponse"]>;
+  readonly resolveSession: ChannelResolveSession;
+  readonly reveal: DiscordAuthorizationReveal;
+}): Promise<void> {
   const { interaction } = input;
   const state = stateFromInteraction(interaction, {
     conversationId: interaction.messageId,
     hasMessageAnchor: true,
-    initialResponseSent: true,
+    initialResponseSent: false,
   });
+  const discord = buildDiscordHandle({ config: input.config, state });
   let auth: SessionAuthContext | null = null;
   try {
     const result = await input.onInputResponse(
-      {
-        defaultAuth: defaultDiscordAuth(interaction),
-        discord: buildDiscordHandle({ config: input.config, state }),
-      },
+      { defaultAuth: defaultDiscordAuth(interaction), discord },
       interaction,
     );
     auth = result?.auth ?? null;
@@ -684,10 +697,12 @@ async function revealAuthorization(input: {
       input.resolveSession(discordContinuationToken(interaction.channelId, interaction.messageId)),
     reveal: input.reveal,
   });
-  return discordJsonBody({
-    data: { ...body, allowed_mentions: DISCORD_NO_MENTIONS, flags: DISCORD_EPHEMERAL_MESSAGE_FLAG },
-    type: DISCORD_INTERACTION_RESPONSE_TYPE.CHANNEL_MESSAGE_WITH_SOURCE,
-  });
+  try {
+    // Fills in the ephemeral deferred response, so only the presser sees it.
+    await discord.editOriginalResponse(body);
+  } catch (error) {
+    log.error("Discord sign-in reply failed", { error });
+  }
 }
 
 function handleComponentInteraction(input: {
@@ -870,6 +885,7 @@ function stateFromInteraction(
 ): DiscordChannelState {
   return {
     audience: discordAudience(interaction.channelType),
+    directMessage: interaction.channelType === 1,
     applicationId: interaction.applicationId,
     channelId: interaction.channelId,
     conversationId: options.conversationId,

@@ -7,7 +7,9 @@
  * the person who must sign in.
  */
 
-import { findPendingAuthorization } from "#channel/pending-authorization.js";
+import { createHash } from "node:crypto";
+
+import { attemptKey, findPendingAuthorization } from "#channel/pending-authorization.js";
 import type { Session } from "#channel/session.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import { createLogger } from "#internal/logging.js";
@@ -27,15 +29,13 @@ type AuthorizationCompleted = AuthorizationCompletedStreamEvent["data"];
 /** Custom id prefix of the shared sign-in message's button. */
 export const DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX = "eve_auth:";
 
-const CUSTOM_ID_MAX_LENGTH = 100;
 const LINK_BUTTON_STYLE = 5;
 const PRIMARY_BUTTON_STYLE = 1;
 const NOT_YOURS = "Only the person who needs to sign in can open this sign-in.";
 
-/** The sign-in attempt a shared message's button names. */
+/** The sign-in attempt a shared message's button names, as an opaque digest. */
 export interface DiscordAuthorizationReveal {
-  readonly name: string;
-  readonly attemptId?: string;
+  readonly attempt: string;
 }
 
 function displayNameOf(event: {
@@ -111,15 +111,8 @@ export function readDiscordAuthorizationReveal(
   customId: string,
 ): DiscordAuthorizationReveal | null {
   if (!customId.startsWith(DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX)) return null;
-  try {
-    const [name, attemptId] = JSON.parse(
-      customId.slice(DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX.length),
-    ) as unknown[];
-    if (typeof name !== "string") return null;
-    return typeof attemptId === "string" ? { attemptId, name } : { name };
-  } catch {
-    return null;
-  }
+  const attempt = customId.slice(DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX.length);
+  return attempt ? { attempt } : null;
 }
 
 /**
@@ -134,7 +127,6 @@ export async function answerDiscordAuthorizationReveal(input: {
   readonly reveal: DiscordAuthorizationReveal;
 }): Promise<DiscordMessageBody> {
   if (input.auth === null) return { content: NOT_YOURS };
-  const { attemptId, name } = input.reveal;
   let event: AuthorizationRequired | undefined;
   try {
     const session = await input.resolveSession();
@@ -142,9 +134,7 @@ export async function answerDiscordAuthorizationReveal(input: {
       session &&
       (await findPendingAuthorization(
         session,
-        // A button too long to name the attempt names only the connection.
-        (candidate) =>
-          candidate.name === name && (attemptId === undefined || candidate.attemptId === attemptId),
+        (candidate) => attemptDigest(candidate) === input.reveal.attempt,
       ));
   } catch (error) {
     log.error("Discord sign-in lookup failed", { error });
@@ -155,14 +145,24 @@ export async function answerDiscordAuthorizationReveal(input: {
 }
 
 function authorizationCustomId(event: AuthorizationRequired): string {
-  const withAttempt = `${DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX}${JSON.stringify([event.name, event.attemptId])}`;
-  if (event.attemptId !== undefined && withAttempt.length <= CUSTOM_ID_MAX_LENGTH) {
-    return withAttempt;
-  }
-  return `${DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX}${JSON.stringify([event.name])}`.slice(
-    0,
-    CUSTOM_ID_MAX_LENGTH,
-  );
+  return `${DISCORD_AUTHORIZATION_CUSTOM_ID_PREFIX}${attemptDigest(event)}`;
+}
+
+/**
+ * A fixed-length digest of one sign-in attempt. Connection names can be long
+ * enough to overflow Discord's 100-character `custom_id`, and a digest never
+ * needs truncating, so the button always names its exact attempt.
+ */
+function attemptDigest(event: { readonly attemptId?: string; readonly name: string }): string {
+  return createHash("sha256").update(attemptKey(event)).digest("base64url").slice(0, 32);
+}
+
+/** The key a channel's state tracks one sign-in attempt's message under. */
+export function discordAuthorizationMessageKey(event: {
+  readonly attemptId?: string;
+  readonly name: string;
+}): string {
+  return attemptDigest(event);
 }
 
 /** The Discord user behind a default principal (`discord:<userId>`), when it is one. */

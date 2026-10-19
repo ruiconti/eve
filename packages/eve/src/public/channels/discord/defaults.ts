@@ -4,6 +4,7 @@ import { resolvedPromptLabel } from "#channel/resolved-prompt.js";
 import { createLogger, extractErrorId, formatErrorHint } from "#internal/logging.js";
 import {
   DISCORD_MESSAGE_CONTENT_MAX_LENGTH,
+  DISCORD_NO_MENTIONS,
   splitDiscordMessageContent,
 } from "#public/channels/discord/api.js";
 import type {
@@ -17,6 +18,7 @@ import type {
 } from "#public/channels/discord/messages.js";
 import { renderInputRequestComponents } from "#public/channels/discord/hitl.js";
 import {
+  discordAuthorizationMessageKey,
   renderDiscordAuthorizationCompleted,
   renderDiscordAuthorizationPrompt,
   renderDiscordAuthorizationStatus,
@@ -101,13 +103,26 @@ export async function editDiscordResolvedPrompt(
   label: string,
 ): Promise<void> {
   const content = `${prompt.content}\n\n${label}`.slice(0, DISCORD_MESSAGE_CONTENT_MAX_LENGTH);
+  await editDiscordMessage(discord, prompt.messageId, content);
+}
+
+/**
+ * Rewrites one of the bot's messages in the current channel to `content` and
+ * removes its components. Throws when Discord refuses the edit.
+ */
+async function editDiscordMessage(
+  discord: Pick<DiscordHandle, "channelId" | "request">,
+  messageId: string,
+  content: string,
+): Promise<void> {
+  // A raw request skips the API helpers' default, so suppress pings here.
   const response = await discord.request(
-    `/channels/${encodeURIComponent(discord.channelId)}/messages/${encodeURIComponent(prompt.messageId)}`,
-    { components: [], content },
+    `/channels/${encodeURIComponent(discord.channelId)}/messages/${encodeURIComponent(messageId)}`,
+    { allowed_mentions: DISCORD_NO_MENTIONS, components: [], content },
     { botAuth: true, method: "PATCH" },
   );
   if (!response.ok) {
-    throw new Error(`Discord prompt edit failed with HTTP ${response.status}.`);
+    throw new Error(`Discord message edit failed with HTTP ${response.status}.`);
   }
 }
 
@@ -125,20 +140,19 @@ export const defaultEvents: DiscordChannelEvents = {
     await channel.discord.startTyping();
   },
 
-  // In a DM the person signing in is the only one there, so the link goes in the open.
-  // Anywhere eve can't tell, such as a proactive session, the button keeps it private.
+  // In a 1:1 DM the person signing in is the only one there, so the link goes in the open.
+  // Anywhere else, including group DMs and proactive sessions, the button keeps it private.
   async "authorization.required"(event, channel, _ctx) {
-    const isDirectMessage =
-      channel.discord.guildId === undefined && channel.state.audience === "private";
-    const message = isDirectMessage
-      ? renderDiscordAuthorizationPrompt(event)
-      : renderDiscordAuthorizationStatus(event);
+    const message =
+      channel.state.directMessage === true
+        ? renderDiscordAuthorizationPrompt(event)
+        : renderDiscordAuthorizationStatus(event);
     try {
       const posted = await channel.discord.post(message);
       if (posted.id) {
         channel.state.pendingAuthMessageIds = {
           ...channel.state.pendingAuthMessageIds,
-          [event.name]: posted.id,
+          [discordAuthorizationMessageKey(event)]: posted.id,
         };
       }
     } catch (error) {
@@ -150,19 +164,17 @@ export const defaultEvents: DiscordChannelEvents = {
     if (event.outcome === "authorized") {
       await channel.discord.startTyping();
     }
-    const messageId = channel.state.pendingAuthMessageIds?.[event.name];
+    const key = discordAuthorizationMessageKey(event);
+    const messageId = channel.state.pendingAuthMessageIds?.[key];
     if (messageId === undefined) return;
-    const { [event.name]: _, ...rest } = channel.state.pendingAuthMessageIds ?? {};
+    const { [key]: _, ...rest } = channel.state.pendingAuthMessageIds ?? {};
     channel.state.pendingAuthMessageIds = rest;
     try {
-      const response = await channel.discord.request(
-        `/channels/${encodeURIComponent(channel.discord.channelId)}/messages/${encodeURIComponent(messageId)}`,
-        { components: [], content: renderDiscordAuthorizationCompleted(event) },
-        { botAuth: true, method: "PATCH" },
+      await editDiscordMessage(
+        channel.discord,
+        messageId,
+        renderDiscordAuthorizationCompleted(event),
       );
-      if (!response.ok) {
-        log.warn("Discord sign-in edit failed", { name: event.name, status: response.status });
-      }
     } catch (error) {
       log.warn("Discord sign-in edit failed", { error, name: event.name });
     }

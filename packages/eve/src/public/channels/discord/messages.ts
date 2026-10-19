@@ -220,7 +220,11 @@ export function createDiscordGatewayRoute(input: {
         initialResponseSent: true,
         interactionToken: null,
       };
-      if (isDirectMessage) state.audience = discordAudience(1);
+      // Bots receive only 1:1 DMs over the Gateway, never group DMs.
+      if (isDirectMessage) {
+        state.audience = discordAudience(1);
+        state.directMessage = true;
+      }
 
       let result: DiscordMessageResult;
       try {
