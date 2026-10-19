@@ -6,6 +6,8 @@
  */
 
 import type { SessionAuthContext } from "#channel/types.js";
+import { EveAttachmentError } from "#internal/attachments/errors.js";
+import { readLimitedBytes } from "#internal/attachments/limited-read.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { type AuthFn, localDev, routeAuth, vercelOidc } from "#public/channels/auth.js";
 import {
@@ -37,8 +39,11 @@ const log = createLogger("discord.gateway");
 /** Default path of the route that accepts forwarded Gateway dispatches. */
 const DEFAULT_GATEWAY_ROUTE = "/eve/v1/discord/gateway";
 
-/** Conversation id of a session that spans a whole channel: a DM or a thread. */
+/** Conversation key of a session that spans a whole channel: a DM or a thread. */
 const WHOLE_CHANNEL_CONVERSATION = "channel";
+
+// A MESSAGE_CREATE dispatch is a few kilobytes; the cap only bounds a misbehaving relay.
+const MAX_DISPATCH_BYTES = 1024 * 1024;
 
 // DEFAULT and REPLY. Other types are system notices such as joins and pins.
 const CONVERSATIONAL_MESSAGE_TYPES = new Set([0, 19]);
@@ -58,6 +63,8 @@ export interface DiscordGatewayMessage {
   readonly content: string;
   readonly author: DiscordUser;
   readonly attachments: readonly DiscordAttachment[];
+  /** ID of the message this one replies to, if any. */
+  readonly referencedMessageId?: string;
   /**
    * Whether the message is meant for the bot: a direct message, a mention, a
    * reply to one of the bot's messages, or a message in a thread where the bot
@@ -73,11 +80,25 @@ export interface DiscordGatewayMessage {
  * - `auth`: session auth context for the dispatched turn, or `null` for anonymous.
  * - `context`: model-visible context lines appended after the Discord context block.
  * - `title`: workflow run title override that does not change model input.
+ * - `conversation`: which session in the channel the message joins; see
+ *   {@link DiscordMessageResult.conversation}.
  */
 export type DiscordMessageResult = {
   readonly auth: SessionAuthContext | null;
   readonly context?: readonly string[];
   readonly title?: string;
+  /**
+   * Key of the session the message joins within its Discord channel. Messages
+   * with the same key share a session. A message ID is the key of the
+   * session that owns that message: the one it started, or the one whose bot
+   * reply it is. `"channel"` is one session for the whole channel. Any other
+   * string is your own grouping, such as `` `user:${message.author.id}` ``.
+   *
+   * Defaults to `"channel"` in DMs and threads; elsewhere, to the replied-to
+   * message's session when one owns it, or else a new session keyed by this
+   * message.
+   */
+  readonly conversation?: string;
 } | null;
 
 /** Sync or async {@link DiscordMessageResult}. */
@@ -95,10 +116,10 @@ export interface DiscordGatewayConfig {
    */
   readonly auth?: AuthFn<Request> | readonly AuthFn<Request>[];
   /**
-   * Decides whether a message dispatches and under what `auth`. Called for
-   * every conversational message from a person; bot authors never reach it.
-   * Defaults to dispatching addressed messages with
-   * `defaultDiscordMessageAuth`.
+   * Decides whether a message dispatches, under what `auth`, and which
+   * session it joins. Called for every conversational message from a person;
+   * bot authors never reach it. Defaults to dispatching addressed messages
+   * with `defaultDiscordMessageAuth` and the default `conversation`.
    */
   onMessage?(ctx: DiscordContext, message: DiscordGatewayMessage): DiscordMessageResultOrPromise;
 }
@@ -119,9 +140,16 @@ export function createDiscordGatewayRoute(input: {
       const caller = await routeAuth(req, auth);
       if (caller instanceof Response) return caller;
 
+      let body: Buffer;
+      try {
+        body = await readLimitedBytes(req, MAX_DISPATCH_BYTES, "discord");
+      } catch (error) {
+        if (!(error instanceof EveAttachmentError)) throw error;
+        return Response.json({ error: "Body exceeds 1 MB." }, { status: 413 });
+      }
       let dispatch: unknown;
       try {
-        dispatch = JSON.parse(await req.text());
+        dispatch = JSON.parse(body.toString("utf8"));
       } catch {
         return Response.json({ error: "Body is not JSON." }, { status: 400 });
       }
@@ -154,15 +182,15 @@ export function createDiscordGatewayRoute(input: {
 
       const state: DiscordChannelState = {
         applicationId,
-        audience: discordAudience(isDirectMessage ? 1 : undefined),
         channelId: message.channelId,
         conversationId: null,
         guildId: message.guildId ?? null,
-        // Replies post as channel messages; only prompts with components alias the session.
+        // Replies post as channel messages, which alias the session without re-keying it.
         hasMessageAnchor: true,
         initialResponseSent: true,
         interactionToken: null,
       };
+      if (isDirectMessage) state.audience = discordAudience(1);
 
       let result: DiscordMessageResult;
       try {
@@ -173,15 +201,24 @@ export function createDiscordGatewayRoute(input: {
       }
       if (result === null) return ignored("not_accepted");
 
-      if (isDirectMessage || channelSession !== undefined) {
-        state.conversationId = WHOLE_CHANNEL_CONVERSATION;
-      } else {
+      state.conversationId = isNonEmptyString(result.conversation)
+        ? result.conversation
+        : await defaultConversation();
+
+      async function defaultConversation(): Promise<string> {
+        if (isDirectMessage || channelSession !== undefined) return WHOLE_CHANNEL_CONVERSATION;
+        const replyTo = message.referencedMessageId;
+        if (
+          replyTo !== undefined &&
+          (await resolveSession(discordContinuationToken(message.channelId, replyTo))) !== undefined
+        ) {
+          return replyTo;
+        }
         const channelType = await lookUpChannelType(config, message.channelId);
-        state.audience = discordAudience(channelType);
-        state.conversationId =
-          channelType !== undefined && THREAD_CHANNEL_TYPES.has(channelType)
-            ? WHOLE_CHANNEL_CONVERSATION
-            : `user:${message.author.id}`;
+        if (channelType !== undefined) state.audience = discordAudience(channelType);
+        return channelType !== undefined && THREAD_CHANNEL_TYPES.has(channelType)
+          ? WHOLE_CHANNEL_CONVERSATION
+          : message.id;
       }
 
       const contextBlock = formatDiscordContextBlock({
@@ -239,7 +276,16 @@ function parseGatewayMessage(
     guildId: isNonEmptyString(raw.guild_id) ? raw.guild_id : undefined,
     id: raw.id,
     raw,
+    referencedMessageId: referencedMessageId(raw),
   };
+}
+
+function referencedMessageId(raw: Record<string, unknown>): string | undefined {
+  const reference = isObject(raw.message_reference) ? raw.message_reference : null;
+  // Type 1 is a forward, which quotes a message rather than replying to it.
+  if (reference === null || (reference.type !== undefined && reference.type !== 0))
+    return undefined;
+  return isNonEmptyString(reference.message_id) ? reference.message_id : undefined;
 }
 
 // A bot user's id is its application's id.

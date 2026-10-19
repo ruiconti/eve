@@ -53,13 +53,17 @@ Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}�
 - **Addressing.** A message is `addressed` when it is a DM, mentions the bot, replies to the
   bot, or arrives in a thread with a live session. The default `onMessage` dispatches addressed
   messages; a custom one sees every message from a person. Bot authors never reach the hook.
-- **Sessions.** DMs and threads map to one session per channel (`<channelId>:channel`); other
-  channels map to one per person (`<channelId>:user:<userId>`). Gateway messages omit the
-  channel type, so the route looks it up only when an addressed guild message has no session.
+- **Sessions.** DMs and threads map to one session per channel (`<channelId>:channel`). In a
+  text channel, a mention starts a session keyed by the message (`<channelId>:<messageId>`),
+  and a reply continues whichever live session owns the replied-to message. `onMessage` can
+  return `conversation` to choose the key instead, such as `user:<userId>` for one session per
+  person. Gateway messages omit the channel type, so the route looks it up only when the
+  default needs it.
 - **Delivery.** Gateway sessions have no interaction token, so `channel.discord.post()` sends
   channel messages. They start with `hasMessageAnchor: true`, so replies never re-key the
-  session, but prompts with components still alias `<channelId>:<messageId>` and button presses
-  arriving as interactions find the session.
+  session. Every message the bot posts, in any Discord session, aliases
+  `<channelId>:<messageId>`, so both a button press and a Gateway reply find the session that
+  posted it.
 - **Identity.** Messages and interactions from the same person share a principal, including the
   existing `discord-interaction` authenticator, so requester-only approvals asked by a message
   accept that person's button press. Keeping the old authenticator string avoids orphaning
@@ -68,6 +72,9 @@ Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}�
   ordinary route auth: `localDev()` plus Vercel OIDC from this project's runtime in the same
   environment (`principalType: "runtime"`). A preview deployment cannot post to production. The relay signs with the project's OIDC token by default and forwards without
   credentials when none exists, which `eve dev` accepts.
+- **Route contract.** The body is a raw Gateway dispatch, capped at 1 MB. Responses: `202`
+  dispatched, `200 { accepted: false, reason }` ignored, `400` not JSON, `401` auth, `413` too
+  large, `5xx` not dispatched (retryable). eve does not deduplicate.
 - **Relay.** Discovers the Gateway URL from `GET /gateway/bot`, identifies with the
   `GUILD_MESSAGES` and `DIRECT_MESSAGES` intents (plus `MESSAGE_CONTENT` on request), resumes
   across reconnects, and forwards dispatches serially with a bounded backlog. It retries only

@@ -821,32 +821,39 @@ describe("discordChannel() Gateway route", () => {
 
   it.each([
     {
-      name: "a mention in a channel starts a per-user session",
+      name: "a mention in a channel starts a new session keyed by the message",
       message: {},
-      channelType: 0,
-      token: "C01:user:U01",
+      activeTokens: [],
+      token: "C01:M01",
     },
     {
-      name: "a reply to the bot in a channel starts a per-user session",
+      name: "a reply to the bot continues the session that posted the replied-to message",
       message: {
         content: "and then?",
         mentions: [],
-        referenced_message: { author: { id: "APP1" } },
+        message_reference: { message_id: "B01" },
+        referenced_message: { author: { id: "APP1" }, id: "B01" },
         type: 19,
       },
-      channelType: 0,
-      token: "C01:user:U01",
+      activeTokens: ["C01:B01"],
+      token: "C01:B01",
     },
     {
-      name: "a mention in a thread starts a session for the whole thread",
-      message: {},
-      channelType: 11,
-      token: "C01:channel",
+      name: "a reply to a bot message no session owns starts a new session",
+      message: {
+        content: "and then?",
+        mentions: [],
+        message_reference: { message_id: "B01" },
+        referenced_message: { author: { id: "APP1" }, id: "B01" },
+        type: 19,
+      },
+      activeTokens: [],
+      token: "C01:M01",
     },
-  ])("$name", async ({ message, channelType, token }) => {
-    const { channel } = gatewayChannel({ channelType });
+  ])("$name", async ({ message, activeTokens, token }) => {
+    const { channel } = gatewayChannel({ channelType: 0 });
 
-    const { send } = await fireGateway(channel, messageCreate(message));
+    const { send } = await fireGateway(channel, messageCreate(message), { activeTokens });
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]![0]).toBe(token);
@@ -854,6 +861,14 @@ describe("discordChannel() Gateway route", () => {
       auth: { principalId: "discord:G01:U01" },
       message: expect.stringMatching(/^(hello|and then\?)$/),
     });
+  });
+
+  it("starts one session for a whole thread", async () => {
+    const { channel } = gatewayChannel({ channelType: 11 });
+
+    const { send } = await fireGateway(channel, messageCreate());
+
+    expect(send.mock.calls[0]![0]).toBe("C01:channel");
   });
 
   it("continues a thread conversation without a mention", async () => {
@@ -894,12 +909,13 @@ describe("discordChannel() Gateway route", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("lets onMessage accept messages the default would ignore", async () => {
-    const { channel } = gatewayChannel({
+  it("lets onMessage accept messages the default would ignore and choose their session", async () => {
+    const { channel, discordFetch } = gatewayChannel({
       gateway: {
         onMessage: (_ctx, message) => ({
           auth: defaultDiscordMessageAuth(message),
           context: [`addressed: ${message.addressed}`],
+          conversation: `user:${message.author.id}`,
         }),
       },
     });
@@ -909,10 +925,63 @@ describe("discordChannel() Gateway route", () => {
       messageCreate({ content: "anyone around?", mentions: [] }),
     );
 
+    expect(discordFetch).not.toHaveBeenCalled();
+    expect(send.mock.calls[0]![0]).toBe("C01:user:U01");
     expect(send.mock.calls[0]![1]).toMatchObject({
       context: [expect.stringContaining("<discord_context>"), "addressed: false"],
       message: "anyone around?",
     });
+  });
+
+  it("rejects dispatches over 1 MB", async () => {
+    const { channel } = gatewayChannel();
+
+    const { response, send } = await fireGateway(
+      channel,
+      messageCreate({ content: "x".repeat(1024 * 1024) }),
+    );
+
+    expect(response.status).toBe(413);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("aliases every reply in a Gateway session without re-keying it", async () => {
+    let nextId = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ channel_id: "C01", id: `B0${++nextId}` })),
+    );
+    const adapter = withState(
+      getAdapter(discordChannel({ credentials: { applicationId: "APP1", botToken: "bot-token" } })),
+      {
+        applicationId: "APP1",
+        channelId: "C01",
+        conversationId: "M01",
+        guildId: "G01",
+        hasMessageAnchor: true,
+        initialResponseSent: true,
+        interactionToken: null,
+      },
+    );
+    const { accessor, writes } = captureAccessor("discord:C01:M01");
+
+    await callEvent(
+      adapter,
+      makeEvent("message.completed", {
+        finishReason: "stop",
+        message: `${"a".repeat(1990)}\n${"b".repeat(100)}`,
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "t1",
+      }),
+      buildAdapterContext(adapter, accessor),
+    );
+
+    expect((adapter.state as { conversationId: string }).conversationId).toBe("M01");
+    expect(writes.filter(([key]) => key === "eve.continuationToken")).toEqual([
+      ["eve.continuationToken", "discord:C01:B01"],
+      ["eve.continuationToken", "discord:C01:B02"],
+    ]);
   });
 
   it("accepts only this project's runtime in the same environment by default", async () => {

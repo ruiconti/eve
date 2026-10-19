@@ -416,13 +416,12 @@ function buildDiscordHandle(input: {
   const credentials = mergeCredentials(input.config.credentials, state);
 
   /**
-   * The first posted message anchors the conversation. A press finds its
-   * session by the id of the message it is on, so every later message with
-   * components, such as a second pending question, is aliased too.
+   * The first posted message anchors the conversation. Every posted message
+   * is aliased too: a press finds its session by the id of the message it is
+   * on, and a Gateway reply by the id of the message it replies to.
    */
-  function anchor(posted: DiscordPostedMessage, body: DiscordMessageBody): void {
+  function anchor(posted: DiscordPostedMessage): void {
     if (!posted.id) return;
-    if (state.hasMessageAnchor && body.components === undefined) return;
     if (!state.hasMessageAnchor) {
       state.conversationId = posted.id;
       state.hasMessageAnchor = true;
@@ -445,7 +444,7 @@ function buildDiscordHandle(input: {
       fetch: api?.fetch,
       channelId,
     });
-    anchor(posted, body);
+    anchor(posted);
     return posted;
   }
 
@@ -463,7 +462,7 @@ function buildDiscordHandle(input: {
       interactionToken,
     });
     state.initialResponseSent = true;
-    anchor(posted, body);
+    anchor(posted);
     return posted;
   }
 
@@ -480,7 +479,7 @@ function buildDiscordHandle(input: {
       fetch: api?.fetch,
       interactionToken,
     });
-    anchor(posted, body);
+    anchor(posted);
     return posted;
   }
 
