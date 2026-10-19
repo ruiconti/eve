@@ -23,6 +23,7 @@ import {
   type DiscordGatewayConfig,
 } from "#public/channels/discord/index.js";
 import { captureLogRecords } from "#internal/testing/log-records.js";
+import { installMockedVercelIssuer } from "#internal/testing/mock-vercel-oidc-issuer.js";
 import { mockAgentRouteArgs } from "#internal/testing/mocks/mock-route-args.js";
 
 function asCompiled<T = unknown>(channel: unknown): CompiledChannel<T> {
@@ -241,7 +242,7 @@ describe("discordChannel() inbound route", () => {
     expect(continuationToken).toBe("C01:I01");
     expect(input).toMatchObject({
       auth: {
-        authenticator: "discord",
+        authenticator: "discord-interaction",
         principalId: "discord:G01:U01",
       },
       state: {
@@ -755,7 +756,7 @@ function gatewayChannel(
 async function fireGateway(
   channel: unknown,
   body: unknown,
-  options: { readonly activeTokens?: readonly string[] } = {},
+  options: { readonly activeTokens?: readonly string[]; readonly bearer?: string } = {},
 ): Promise<{ response: Response; send: ReturnType<typeof vi.fn> }> {
   const route = asCompiled(channel).routes.find(
     (candidate) => isHttpRouteDefinition(candidate) && candidate.path === "/eve/v1/discord/gateway",
@@ -765,6 +766,7 @@ async function fireGateway(
   const response = await route.handler(
     new Request("https://example.com/eve/v1/discord/gateway", {
       body: JSON.stringify(body),
+      headers: options.bearer === undefined ? {} : { authorization: `Bearer ${options.bearer}` },
       method: "POST",
     }),
     {
@@ -803,7 +805,7 @@ describe("discordChannel() Gateway route", () => {
     const [token, input] = send.mock.calls[0]!;
     expect(token).toBe("D01:channel");
     expect(input).toMatchObject({
-      auth: { authenticator: "discord", principalId: "discord:U01" },
+      auth: { authenticator: "discord-interaction", principalId: "discord:U01" },
       message: "hi there",
       state: {
         audience: "private",
@@ -913,16 +915,35 @@ describe("discordChannel() Gateway route", () => {
     });
   });
 
-  it("rejects relay requests without credentials by default", async () => {
+  it("accepts only this project's runtime in the same environment by default", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("VERCEL_PROJECT_ID", "prj_bot");
+    vi.stubEnv("VERCEL_TARGET_ENV", "production");
+    const issuer = await installMockedVercelIssuer("discord-gateway-route");
+    const tokenFrom = (environment: string) =>
+      issuer.signToken({
+        environment,
+        project_id: "prj_bot",
+        sub: `owner:acme:project:bot:environment:${environment}`,
+      });
     const channel = discordChannel({
       credentials: { applicationId: "APP1", botToken: "bot-token" },
       gateway: {},
     });
+    const dm = messageCreate({ guild_id: undefined });
 
-    const { response, send } = await fireGateway(channel, messageCreate());
+    try {
+      const unauthenticated = await fireGateway(channel, dm);
+      const preview = await fireGateway(channel, dm, { bearer: await tokenFrom("preview") });
+      const production = await fireGateway(channel, dm, { bearer: await tokenFrom("production") });
 
-    expect(response.status).toBe(401);
-    expect(send).not.toHaveBeenCalled();
+      expect(unauthenticated.response.status).toBe(401);
+      expect(preview.response.status).toBe(401);
+      expect(preview.send).not.toHaveBeenCalled();
+      expect(production.response.status).toBe(202);
+    } finally {
+      issuer.restore();
+    }
   });
 });
 
@@ -972,7 +993,7 @@ describe("defaultDiscordAuth", () => {
         interaction_id: "I01",
         user_id: "U01",
       },
-      authenticator: "discord",
+      authenticator: "discord-interaction",
       principalId: "discord:G01:U01",
       principalType: "user",
     });

@@ -17,6 +17,8 @@ interface GatewayConnection {
   readonly received: Record<string, any>[];
   send(payload: unknown): void;
   close(code: number): void;
+  /** Stops answering, like a peer whose TCP connection silently died. */
+  goSilent(): void;
 }
 
 /**
@@ -63,23 +65,32 @@ function acceptWebSocket(req: IncomingMessage, socket: Duplex): GatewayConnectio
   );
 
   const received: Record<string, any>[] = [];
+  let silent = false;
   let buffer = Buffer.alloc(0);
   socket.on("data", (chunk: Buffer) => {
     buffer = Buffer.concat([buffer, chunk]);
     for (let frame = readFrame(buffer); frame; frame = readFrame(buffer)) {
       buffer = buffer.subarray(frame.length);
-      if (frame.opcode === 1) received.push(JSON.parse(frame.payload.toString("utf8")));
-      if (frame.opcode === 8) {
+      if (frame.opcode === 1) {
+        const payload = JSON.parse(frame.payload.toString("utf8"));
+        received.push(payload);
+        if (payload.op === 1 && !silent) socket.write(encodeFrame(1, Buffer.from('{"op":11}')));
+      }
+      if (frame.opcode === 8 && !silent) {
         socket.end(encodeFrame(8, frame.payload));
       }
     }
   });
   socket.on("error", () => {});
+  sockets.push(socket);
 
   return {
     path: req.url ?? "",
     received,
     send: (payload) => socket.write(encodeFrame(1, Buffer.from(JSON.stringify(payload)))),
+    goSilent: () => {
+      silent = true;
+    },
     close: (code) => {
       const payload = Buffer.alloc(2);
       payload.writeUInt16BE(code);
@@ -121,7 +132,7 @@ function port(server: Server): number {
 }
 
 async function waitFor(condition: () => boolean): Promise<void> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 10_000;
   while (!condition()) {
     if (Date.now() > deadline) throw new Error("Timed out waiting for the relay.");
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -129,8 +140,11 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 const servers: Server[] = [];
+const sockets: Duplex[] = [];
 
 afterEach(async () => {
+  // Upgraded sockets leave the HTTP server's bookkeeping, and a silent one never closes.
+  for (const socket of sockets.splice(0)) socket.destroy();
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -201,6 +215,36 @@ describe("runDiscordGatewayRelay", () => {
       { authorization: "Bearer relay", body: messageCreate(4, "M2") },
       { authorization: "Bearer relay", body: messageCreate(6, "M3") },
     ]);
+  });
+
+  it("abandons a connection that stops acknowledging heartbeats and resumes elsewhere", async () => {
+    const connections: GatewayConnection[] = [];
+    const discord = await startFakeDiscord((connection) => {
+      connections.push(connection);
+      connection.send({ d: { heartbeat_interval: 50 }, op: 10 });
+    });
+    const shutdown = new AbortController();
+    const relay = runDiscordGatewayRelay({
+      api: { apiBaseUrl: `${discord.url}/api/v10` },
+      credentials: { botToken: "bot-token" },
+      signal: shutdown.signal,
+      url: discord.url,
+    });
+
+    await waitFor(() => connections[0]?.received.some((payload) => payload.op === 2) === true);
+    connections[0]!.send({
+      d: { resume_gateway_url: `${discord.url.replace("http", "ws")}/resume`, session_id: "S1" },
+      op: 0,
+      s: 1,
+      t: "READY",
+    });
+    connections[0]!.goSilent();
+
+    await waitFor(() => connections[1]?.received.some((payload) => payload.op === 6) === true);
+    shutdown.abort();
+    await relay;
+
+    expect(connections[1]!.path).toMatch(/^\/resume\?/);
   });
 
   it("stops with an actionable error when Discord refuses the bot's intents", async () => {

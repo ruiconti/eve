@@ -9,6 +9,8 @@ const MAX_RECONNECT_DELAY_MS = 60_000;
 const RESUMABLE_CLOSE = 4000;
 // Bad token, bad shard, sharding required, bad API version, bad or disallowed intents.
 const FATAL_CLOSE_CODES = new Set([4004, 4010, 4011, 4012, 4013, 4014]);
+// A dead peer never answers a close frame, so the socket would sit in CLOSING.
+const CLOSE_HANDSHAKE_TIMEOUT_MS = 3_000;
 // Invalid sequence and session timed out: reconnect, but identify from scratch.
 const SESSION_RESET_CLOSE_CODES = new Set([4007, 4009]);
 
@@ -125,7 +127,18 @@ export async function runGatewayConnection(options: GatewayConnectionOptions): P
 
       const socket = new WebSocket(url);
       let heartbeatTimer: NodeJS.Timeout | undefined;
+      let closeTimer: NodeJS.Timeout | undefined;
       let heartbeatAcked = true;
+      let settled = false;
+
+      const settle = (code: number, reason: string) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(heartbeatTimer);
+        clearTimeout(closeTimer);
+        options.signal.removeEventListener("abort", onAbort);
+        resolve({ code, reason });
+      };
 
       const send = (payload: { op: number; d: unknown }) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -135,6 +148,7 @@ export async function runGatewayConnection(options: GatewayConnectionOptions): P
           return;
         }
         socket.close(code, reason);
+        closeTimer = setTimeout(() => settle(code, reason), CLOSE_HANDSHAKE_TIMEOUT_MS);
       };
       const onAbort = () => close(1000, "shutdown");
       options.signal.addEventListener("abort", onAbort, { once: true });
@@ -165,6 +179,7 @@ export async function runGatewayConnection(options: GatewayConnectionOptions): P
       };
 
       socket.addEventListener("message", (event) => {
+        if (settled) return;
         let payload: GatewayPayload;
         try {
           payload = JSON.parse(String(event.data)) as GatewayPayload;
@@ -207,11 +222,7 @@ export async function runGatewayConnection(options: GatewayConnectionOptions): P
         }
       });
 
-      socket.addEventListener("close", (event) => {
-        clearTimeout(heartbeatTimer);
-        options.signal.removeEventListener("abort", onAbort);
-        resolve({ code: event.code, reason: event.reason });
-      });
+      socket.addEventListener("close", (event) => settle(event.code, event.reason));
     });
   }
 

@@ -60,15 +60,18 @@ Discord Gateway ──WS──▶ runDiscordGatewayRelay ──POST {op,t,s,d}�
   channel messages. They start with `hasMessageAnchor: true`, so replies never re-key the
   session, but prompts with components still alias `<channelId>:<messageId>` and button presses
   arriving as interactions find the session.
-- **Identity.** Messages and interactions from the same person share a principal, authenticator
-  `discord`, so requester-only approvals asked by a message accept that person's button press.
-  This renames the interaction default from `discord-interaction`.
-- **Route auth.** Defaults to `localDev()` plus same-project Vercel OIDC from a non-user
-  principal. The relay signs with the project's OIDC token by default and forwards without
+- **Identity.** Messages and interactions from the same person share a principal, including the
+  existing `discord-interaction` authenticator, so requester-only approvals asked by a message
+  accept that person's button press. Keeping the old authenticator string avoids orphaning
+  existing principals, pending approvals, and per-user tool sessions.
+- **Route auth.** The body asserts the author's identity, so the default is narrower than
+  ordinary route auth: `localDev()` plus Vercel OIDC from this project's runtime in the same
+  environment (`principalType: "runtime"`). A preview deployment cannot post to production. The relay signs with the project's OIDC token by default and forwards without
   credentials when none exists, which `eve dev` accepts.
 - **Relay.** Discovers the Gateway URL from `GET /gateway/bot`, identifies with the
   `GUILD_MESSAGES` and `DIRECT_MESSAGES` intents (plus `MESSAGE_CONTENT` on request), resumes
-  across reconnects, and forwards dispatches serially with bounded retries and backlog. It stops
+  across reconnects, and forwards dispatches serially with a bounded backlog. It retries only
+  responses and connection errors that show eve never started the turn, never a timeout. It stops
   with `DiscordGatewayFatalError` on close codes that reconnecting cannot fix.
 
 ## Boundaries

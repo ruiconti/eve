@@ -6,8 +6,16 @@ const log = createLogger("discord.gateway");
 
 const MAX_PENDING = 500;
 const MAX_ATTEMPTS = 5;
-const REQUEST_TIMEOUT_MS = 10_000;
+// Generous so a cold start answers before the relay gives up; a timed-out request is not retried.
+const REQUEST_TIMEOUT_MS = 30_000;
 const RETRYABLE_STATUSES = new Set([408, 409, 425, 429]);
+// Failures that happen before the request reaches eve, so retrying cannot start a second turn.
+const UNSENT_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
 
 export interface Forwarder {
   enqueue(dispatch: DiscordGatewayDispatch): void;
@@ -43,7 +51,11 @@ export function createForwarder(options: {
         });
     },
     async drain(timeoutMs) {
-      await Promise.race([tail, sleep(timeoutMs)]);
+      if (pending > 0) {
+        const timeout = new AbortController();
+        await Promise.race([tail, sleep(timeoutMs, timeout.signal)]);
+        timeout.abort();
+      }
       if (pending > 0)
         log.warn("Discord Gateway relay stopped with undelivered dispatches", { pending });
     },
@@ -83,10 +95,24 @@ export function createForwarder(options: {
           status: response.status,
         });
       } catch (error) {
+        if (!UNSENT_ERROR_CODES.has(errorCode(error))) {
+          // eve may have started the turn already; a retry could answer twice.
+          log.error("Gave up forwarding a Discord dispatch that eve may have received", {
+            ...fields,
+            error,
+          });
+          return;
+        }
         log.warn("Retrying a forwarded Discord dispatch", { ...fields, attempt, error });
       }
       if (attempt < MAX_ATTEMPTS) await sleep(Math.min(30_000, 1_000 * 2 ** (attempt - 1)));
     }
     log.error("Gave up forwarding a Discord dispatch", { ...fields, attempts: MAX_ATTEMPTS });
   }
+}
+
+function errorCode(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code = (cause as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" ? code : "";
 }

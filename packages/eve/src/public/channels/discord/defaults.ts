@@ -29,8 +29,8 @@ const log = createLogger("discord.defaults");
 /**
  * Builds the default {@link SessionAuthContext} for the user behind a Discord
  * interaction (a command, button press, select, or modal submission):
- * authenticator `discord`, guild-scoped issuer/principalId when invoked in a
- * guild (else user-scoped), and `principalType` `service` for bot actors or
+ * authenticator `discord-interaction`, guild-scoped issuer/principalId when
+ * invoked in a guild (else user-scoped), and `principalType` `service` for bot actors or
  * `user` otherwise. Copies the channel, interaction, user, guild, and
  * member-nick attributes. A message from the same person gets the same
  * principal from {@link defaultDiscordMessageAuth}.
@@ -70,7 +70,8 @@ function discordUserAuth(
   if (guildId !== undefined) allAttributes.guild_id = guildId;
   return {
     attributes: allAttributes,
-    authenticator: "discord",
+    // Shared by messages too, so changing it would orphan every existing Discord principal.
+    authenticator: "discord-interaction",
     issuer: guildId ? `discord:${guildId}` : "discord",
     principalId: guildId ? `discord:${guildId}:${user.id}` : `discord:${user.id}`,
     principalType: user.isBot ? "service" : "user",

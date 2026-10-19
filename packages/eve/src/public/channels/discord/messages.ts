@@ -88,9 +88,10 @@ export interface DiscordGatewayConfig {
   /** Override the route that accepts forwarded dispatches (`/eve/v1/discord/gateway`). */
   readonly route?: string;
   /**
-   * Authenticates the relay. Defaults to `localDev()` plus Vercel OIDC tokens
-   * minted for this project to a non-user caller, which is what
-   * `runDiscordGatewayRelay` sends from a Vercel Daemon.
+   * Authenticates the relay. The body names the message author, so whoever
+   * passes can act as any Discord user. Defaults to `localDev()` plus Vercel
+   * OIDC tokens from this project's own runtime in the same environment,
+   * which is what `runDiscordGatewayRelay` sends from a Vercel Daemon.
    */
   readonly auth?: AuthFn<Request> | readonly AuthFn<Request>[];
   /**
@@ -109,7 +110,7 @@ export function createDiscordGatewayRoute(input: {
   readonly buildContext: (state: DiscordChannelState) => DiscordContext;
 }): HttpRouteDefinition<DiscordChannelState> {
   const { config, gateway } = input;
-  const auth = gateway.auth ?? [localDev(), sameProjectService()];
+  const auth = gateway.auth ?? [localDev(), sameEnvironmentRuntime()];
   const onMessage = gateway.onMessage ?? defaultOnMessage;
 
   return POST<DiscordChannelState>(
@@ -204,12 +205,16 @@ export function createDiscordGatewayRoute(input: {
   );
 }
 
-/** Same-project Vercel OIDC, minus user tokens: the relay is a service, not a person. */
-function sameProjectService(): AuthFn<Request> {
+/**
+ * Vercel OIDC from this project's runtime in the current environment only.
+ * Other environments, such as a preview deployment, authenticate as
+ * `service` and must not reach production as any Discord user.
+ */
+function sameEnvironmentRuntime(): AuthFn<Request> {
   const oidc = vercelOidc();
   return async (request) => {
     const auth = await oidc(request);
-    return auth && auth.principalType !== "user" ? auth : null;
+    return auth?.principalType === "runtime" ? auth : null;
   };
 }
 

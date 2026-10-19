@@ -134,7 +134,7 @@ Discord Gateway ── WebSocket ──▶ relay (Vercel Daemon) ── POST /ev
 
 ### Enable the Gateway route
 
-Add `gateway` to the channel. It mounts `POST /eve/v1/discord/gateway`, which by default accepts `localDev()` and Vercel OIDC tokens minted for the same project to a service rather than a person:
+Add `gateway` to the channel. It mounts `POST /eve/v1/discord/gateway`. Because each forwarded message names its author, the route by default accepts only `localDev()` and Vercel OIDC tokens from the same project and environment, which excludes preview deployments calling production:
 
 ```ts title="agent/channels/discord.ts"
 import { connectDiscordCredentials } from "@vercel/connect/eve";
@@ -146,7 +146,7 @@ export default discordChannel({
 });
 ```
 
-Pass `gateway.auth` to accept a relay that runs outside your Vercel project, and `gateway.route` to change the path.
+Pass `gateway.auth` to accept a relay that runs elsewhere, and `gateway.route` to change the path. Whoever passes `gateway.auth` can send messages as any Discord user, so keep it as narrow as the default.
 
 ### Run the relay as a Vercel Daemon
 
@@ -251,6 +251,7 @@ Scale the production daemon to zero while you do this. Every connection receives
 - Run one relay per bot. Each connection receives every message.
 - Messages sent while the relay restarts, such as during a deploy, are not delivered.
 - A message can occasionally be answered twice, for example while a deploy briefly runs the old and new daemon together.
+- A message is dropped, not retried, when the agent takes longer than 30 seconds to accept it or the connection fails after the request is sent. Retrying could answer it twice.
 
 ## What to read next
 
