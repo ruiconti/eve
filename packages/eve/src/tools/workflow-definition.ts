@@ -85,7 +85,11 @@ export interface AgentSession {
   ): Promise<AgentResponse<TOutput>>;
 }
 
-/** Members the context of every workflow tool entry point shares. */
+/**
+ * Members the context of every workflow tool entry point shares.
+ * `getSandbox`, `getToken`, and `requireAuth` work only after `ctx` is passed
+ * to a `"use step"` helper; the workflow body throws when it calls them.
+ */
 export type WorkflowSharedContext = Pick<
   ToolContext,
   "session" | "toolName" | "getSandbox" | "getToken" | "requireAuth"

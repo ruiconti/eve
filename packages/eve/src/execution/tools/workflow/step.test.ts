@@ -9,7 +9,10 @@ import {
 import { workflowToolStep } from "#execution/tools/workflow/step.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
 import type { WorkflowToolRunRef } from "#execution/tools/workflow/messages.js";
-import type { WorkflowStepInvocation } from "#execution/tools/workflow/step-context.js";
+import type {
+  WorkflowStepInvocation,
+  WorkflowStepResult,
+} from "#execution/tools/workflow/step-context.js";
 
 vi.mock("#compiled/@workflow/core/index.js", () => ({
   createHook: () => ({ token: "callback-token" }),
@@ -62,7 +65,7 @@ it("resumes a sandbox an earlier step of the same call started, and reports it o
   const ctx = { abortSignal: new AbortController().signal, callId: "call-a", toolName: "deploy" };
   attachWorkflowToolRunContext(ctx, run);
   const received: unknown[] = [];
-  const execute = vi.fn(async (invocation: WorkflowStepInvocation) => {
+  const execute = vi.fn(async (invocation: WorkflowStepInvocation): Promise<WorkflowStepResult> => {
     received.push(invocation.context.sandbox.state);
     // Only the first step finds the sandbox unopened and starts it.
     return received.length === 1
@@ -82,4 +85,20 @@ it("resumes a sandbox an earlier step of the same call started, and reports it o
   await step(ctx);
   expect(received).toEqual([undefined, started, { session: null }]);
   expect(sent).toEqual([{ from: { callId: "call-a" }, kind: "sandbox-started", state: started }]);
+
+  // A step that started the sandbox and failed for good reports it, then fails with its own error.
+  const failure = new Error("deploy failed");
+  execute.mockResolvedValueOnce({
+    authorized: [],
+    error: failure,
+    kind: "failed",
+    sandboxState: started,
+  });
+  await expect(step(ctx)).rejects.toBe(failure);
+  expect(sent).toHaveLength(2);
+  expect(sent.at(-1)).toEqual({
+    from: { callId: "call-b" },
+    kind: "sandbox-started",
+    state: started,
+  });
 });

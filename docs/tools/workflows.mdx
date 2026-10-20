@@ -485,15 +485,20 @@ async function prepareInput(ctx: WorkflowStepToolContext, input: { value: string
 - If the session, or the parent whose sandbox it shares, opened the sandbox before the session
   called the tool, the step resumes that sandbox without running your sandbox definition again.
 - Otherwise the step creates the sandbox through your definition, under the session's sandbox
-  name. When the step returns, eve records the sandbox on the session before the call's result
-  arrives. Later steps of the same call and the session's turns then resume that sandbox without
-  running the definition again, and eve deletes it when the session ends, as it does a sandbox
-  the session opened itself. If the session records its own sandbox first, that record stays.
-- The session does not record a sandbox the step created when every attempt of that step fails,
-  when the session ends while the step runs, or when the session shares its parent's sandbox. In
-  those cases eve deletes the sandbox only if the session, or the parent that owns it, opens it
-  later. To rule out a leftover sandbox, open the sandbox in a turn, such as from a tool, before
-  the workflow tool needs it.
+  name. When the step returns, or fails with no retry left, eve records the sandbox on the session
+  before the call's result arrives. Later steps of the same call and the session's turns then
+  resume that sandbox without running the definition again, and eve deletes it when the session
+  ends, as it does a sandbox the session opened itself. If the session records its own sandbox
+  first, that record stays.
+- Your sandbox definition can still run more than once for one sandbox. When a step and the
+  session's turns, or several steps, open a sandbox that nobody has recorded yet at the same time
+  in different processes, each of them runs the definition. Keep its setup safe to repeat.
+- The session does not record a sandbox the step created when the session ends while the step
+  runs, or when the session shares its parent's sandbox. In those cases eve deletes the sandbox
+  only if the session, or the parent that owns it, opens it later. To rule out a leftover
+  sandbox, open the sandbox in a turn, such as from a tool, before the workflow tool needs it.
+- If the session deletes its sandbox while a step that started it still runs, the step's report
+  can record the deleted sandbox again, and the session's next open of its sandbox then fails.
 
 ## Ask a human: `ctx.ask`
 

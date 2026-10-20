@@ -65,6 +65,20 @@ async function readPreparedStep(ctx: WorkflowStepToolContext) {
   return { prepared: await sandbox.readTextFile({ path: "/workspace/prepared.txt" }) };
 }
 
+export async function sandboxPrepareThenFailWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+  "use workflow";
+  return await prepareThenFailStep(input.service, ctx);
+}
+
+async function prepareThenFailStep(service: string, ctx: WorkflowStepToolContext) {
+  "use step";
+  const sandbox = await ctx.getSandbox();
+  await sandbox.writeTextFile({ content: `prepared:${service}`, path: "/workspace/prepared.txt" });
+  throw Object.assign(new Error(`The ${service} deploy failed after preparing its files.`), {
+    fatal: true,
+  });
+}
+
 export async function workflowContextMisuseWorkflow(_input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
   return await readAgentsStep(ctx);

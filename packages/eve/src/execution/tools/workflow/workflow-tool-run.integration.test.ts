@@ -22,6 +22,7 @@ import {
   failingDeployWorkflow,
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
+  sandboxPrepareThenFailWorkflow,
   sandboxPrepareThenReadWorkflow,
   sandboxPrepareWorkflow,
   stepReferenceWorkflow,
@@ -198,6 +199,45 @@ describe("workflow tools", () => {
     const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
     // The first step ran the definition once; the second step and the session resumed
     // that sandbox, and the session deleted it when it ended.
+    expect(events.filter((event) => event === "definition")).toHaveLength(1);
+    expect(events.at(-1)).toBe("delete");
+  });
+
+  it("records a sandbox a step started even when the step fails, so the session deletes it", async () => {
+    const runtime = await createWorkflowToolRuntime({
+      agentName: "workflow-step-sandbox-failed",
+      execute: sandboxPrepareThenFailWorkflow,
+      toolName: "deploy_service",
+    });
+
+    let reply = "";
+    await runtime.run(async () => {
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: 'Run deploy_service with service "api"' },
+          serializedContext: buildWorkflowToolSerializedContext({
+            continuationToken: "schedule:workflow-step-sandbox-failed",
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      try {
+        const turn = await stream.nextTurn();
+        reply = String(filterEventsByType(turn, "message.completed").at(-1)?.data.message);
+        await resumeSessionInbox(sessionCommandHookToken(run.runId), { kind: "reset" });
+        const terminal = await stream.nextTurn();
+        expect(filterEventsByType(terminal, "session.completed")).toHaveLength(1);
+      } finally {
+        stream.dispose();
+        if ((await run.status) === "running") await run.cancel();
+      }
+    });
+
+    // The call fails with the step's own error, and the session never opened the sandbox itself.
+    expect(reply).toContain("The api deploy failed after preparing its files.");
+    const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
     expect(events.filter((event) => event === "definition")).toHaveLength(1);
     expect(events.at(-1)).toBe("delete");
   });

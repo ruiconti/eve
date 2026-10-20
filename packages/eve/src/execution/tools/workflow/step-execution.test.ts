@@ -210,6 +210,37 @@ describe("workflow step authorization", () => {
     expect(shared).not.toHaveProperty("sandboxState");
   });
 
+  it("reports a sandbox it started when it fails for good, and only then", async () => {
+    bundle.registry = keyedSandboxes().registry;
+    const failure = new Error("service unavailable");
+    const openThenFail = async (ctx: ToolContext) => {
+      await ctx.getSandbox();
+      throw failure;
+    };
+    // An attempt the SDK retries throws, and the retry reports the sandbox.
+    await expect(runStep(openThenFail)).rejects.toBe(failure);
+    durable.attempt = 4;
+    await expect(runStep(openThenFail)).resolves.toMatchObject({
+      error: failure,
+      kind: "failed",
+      sandboxState: { session: { providerName: "keyed" } },
+    });
+    // A fatal error ends the step at once; a step that opened nothing has nothing to report.
+    durable.attempt = 1;
+    const fatal = Object.assign(new Error("rejected"), { fatal: true });
+    await expect(
+      runStep(async (ctx) => {
+        await ctx.getSandbox();
+        throw fatal;
+      }),
+    ).resolves.toMatchObject({ error: fatal, kind: "failed" });
+    await expect(
+      runStep(async () => {
+        throw fatal;
+      }),
+    ).rejects.toBe(fatal);
+  });
+
   it("accepts its own copy of the session's environment and leaves stopping and deleting to the session", async () => {
     const { deleted, provider, registry, stopped } = keyedSandboxes();
     bundle.registry = registry;
@@ -230,10 +261,12 @@ describe("workflow step authorization", () => {
       ["sandbox.delete() is unavailable", async (ctx) => await (await ctx.getSandbox()).delete()],
     ];
     for (const [message, access] of misuse) {
-      await expect(runStep(access)).rejects.toMatchObject({
-        fatal: true,
-        message: expect.stringContaining(message),
-      });
+      // A step that opened the sandbox first returns its error with the sandbox it started.
+      const outcome = await runStep(access).then(
+        (result) => (result.kind === "failed" ? result.error : result),
+        (error: unknown) => error,
+      );
+      expect(outcome).toMatchObject({ fatal: true, message: expect.stringContaining(message) });
     }
     expect(stopped).not.toHaveBeenCalled();
     expect(deleted).not.toHaveBeenCalled();

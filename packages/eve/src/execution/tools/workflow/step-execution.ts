@@ -90,6 +90,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
       });
       let output: unknown;
       let sandboxState: SandboxState | undefined;
+      let failure: Error | undefined;
       try {
         output = await auth.run(() =>
           Reflect.apply(
@@ -104,7 +105,12 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
         if (isConnectionAuthorizationFailedError(error) && !error.retryable) {
           Object.assign(error, { fatal: true });
         }
-        throw error;
+        // A step that started the session's sandbox and fails for good still
+        // reports it, so the session records the sandbox and ends it.
+        if (!(error instanceof Error) || !failsForGood(error, execute)) throw error;
+        sandboxState = await sandbox.started();
+        if (sandboxState === undefined) throw error;
+        failure = error;
       } finally {
         await sandbox.release();
       }
@@ -113,6 +119,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
         .filter((result) => !remaining.includes(result))
         .map((result) => result.attemptId);
       const reported = sandboxState === undefined ? {} : { sandboxState };
+      if (failure !== undefined) return { kind: "failed", error: failure, authorized, ...reported };
       return isAuthorizationSignal(output)
         ? { kind: "authorization-required", signal: output, authorized, ...reported }
         : { kind: "result", output, authorized, ...reported };
@@ -206,6 +213,13 @@ function borrowStepSandbox(input: WorkflowStepContext) {
       });
     },
   };
+}
+
+/** Whether the Workflow SDK retries no further: the error is fatal, or this was the last attempt. */
+function failsForGood(error: Error, execute: (...args: never[]) => unknown): boolean {
+  if (Reflect.get(error, "fatal") === true || error.name === "FatalError") return true;
+  const maxRetries = Reflect.get(execute, "maxRetries");
+  return getStepMetadata().attempt > (typeof maxRetries === "number" ? maxRetries : 3);
 }
 
 function unavailableInStep(capability: string, guidance: string): never {

@@ -38,6 +38,8 @@ export type WorkflowStepResult = {
   readonly sandboxState?: SandboxState;
 } & (
   | { readonly kind: "result"; readonly output: unknown }
+  /** The step failed for good after it started the session's sandbox, which `sandboxState` carries. */
+  | { readonly kind: "failed"; readonly error: Error }
   | { readonly kind: "authorization-required"; readonly signal: AuthorizationSignal }
 );
 

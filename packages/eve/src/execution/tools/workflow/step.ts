@@ -83,13 +83,6 @@ async function executeAuthorizedStep(
         throw error;
       }
 
-      await reconcileCompletedAuthorizations(
-        run,
-        ctx.abortSignal,
-        pending,
-        authorizationResults,
-        result.authorized,
-      );
       // Relayed before the run's outcome, so the session records the sandbox before the call settles.
       if (result.sandboxState !== undefined) {
         run.startedSandbox = { callId: ctx.callId, state: result.sandboxState };
@@ -99,6 +92,20 @@ async function executeAuthorizedStep(
           state: result.sandboxState,
         });
       }
+      if (result.kind === "failed") {
+        if (!ctx.abortSignal.aborted) {
+          await reportPendingAsFailed(run, ctx.abortSignal, pending);
+        }
+        throw result.error;
+      }
+
+      await reconcileCompletedAuthorizations(
+        run,
+        ctx.abortSignal,
+        pending,
+        authorizationResults,
+        result.authorized,
+      );
 
       if (result.kind === "result") {
         await reportPendingAsFailed(run, ctx.abortSignal, pending);
