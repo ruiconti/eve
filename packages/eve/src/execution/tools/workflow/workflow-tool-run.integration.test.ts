@@ -23,7 +23,7 @@ import {
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
   sandboxPrepareThenFailWorkflow,
-  sandboxPrepareThenReadWorkflow,
+  sandboxParallelPrepareWorkflow,
   sandboxPrepareWorkflow,
   stepReferenceWorkflow,
   workflowContextMisuseWorkflow,
@@ -143,24 +143,24 @@ describe("workflow tools", () => {
     expect(consoleOutput.unexpected(workflowSdkNotice.fatalStep)).toEqual([]);
   });
 
-  it("records a sandbox a step started, which later steps and the session resume and the session deletes", async () => {
+  // The test sandbox provider is a custom one: its `start` is not marked to reopen a session's
+  // sandbox, so only the session may allocate it.
+  it("opens a sandbox for steps that ask first through the session, which keeps and deletes it", async () => {
     const readBySession: (string | null)[] = [];
     let reply = "";
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-step-sandbox-first",
-      execute: sandboxPrepareThenReadWorkflow,
+      execute: sandboxParallelPrepareWorkflow,
       modules: [
         {
           logicalPath: "hooks/sandbox.ts",
           loadNamespace: async () => ({
             default: defineHook({
               events: {
-                // The session's first open of its sandbox, after the step started it.
+                // The session's turn uses its sandbox after the steps wrote to it.
                 async "action.result"(_event, ctx) {
                   const sandbox = await ctx.getSandbox();
-                  readBySession.push(
-                    await sandbox.readTextFile({ path: "/workspace/prepared.txt" }),
-                  );
+                  readBySession.push(await sandbox.readTextFile({ path: "/workspace/plan.txt" }));
                 },
               },
             }),
@@ -194,16 +194,18 @@ describe("workflow tools", () => {
       }
     });
 
-    expect(reply).toContain('"prepared":"prepared:api"');
-    expect(readBySession).toEqual(["prepared:api"]);
+    // Both concurrent steps and the last one wrote and read one sandbox, which the session's
+    // turn then saw. The session allocated it once and deleted it when the session ended.
+    expect(reply).toContain('"config":"config:api"');
+    expect(reply).toContain('"plan":"plan:api"');
+    expect(readBySession).toEqual(["plan:api"]);
     const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
-    // The first step ran the definition once; the second step and the session resumed
-    // that sandbox, and the session deleted it when it ended.
     expect(events.filter((event) => event === "definition")).toHaveLength(1);
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
     expect(events.at(-1)).toBe("delete");
   });
 
-  it("records a sandbox a step started even when the step fails, so the session deletes it", async () => {
+  it("leaves no sandbox behind when a step fails after opening it", async () => {
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-step-sandbox-failed",
       execute: sandboxPrepareThenFailWorkflow,
@@ -235,10 +237,10 @@ describe("workflow tools", () => {
       }
     });
 
-    // The call fails with the step's own error, and the session never opened the sandbox itself.
+    // The session recorded the sandbox before the step used it, so it deletes it at its end.
     expect(reply).toContain("The api deploy failed after preparing its files.");
     const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
-    expect(events.filter((event) => event === "definition")).toHaveLength(1);
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
     expect(events.at(-1)).toBe("delete");
   });
 
@@ -288,8 +290,12 @@ describe("workflow tools", () => {
       return String(await readFirstTurnReply(run));
     });
 
+    // The session opened its sandbox before the call, and the step resumed it.
     expect(output).toContain('"seed":"from-session"');
     expect(readBySession).toEqual(["prepared:api"]);
+    const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
+    expect(events.filter((event) => event === "definition")).toHaveLength(1);
+    expect(events.filter((event) => event === "start")).toHaveLength(1);
   });
 
   it("settles the call with an error when the workflow body throws", async () => {

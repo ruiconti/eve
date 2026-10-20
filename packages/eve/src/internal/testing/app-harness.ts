@@ -24,7 +24,6 @@ import {
   defineSandboxProvider,
   type SandboxProviderSessionContext,
 } from "#shared/sandbox-provider.js";
-import { withSessionSandboxReopen } from "#execution/sandbox/session-reopen.js";
 import {
   buildActiveSessionContext,
   type ActiveSessionInit,
@@ -181,21 +180,19 @@ function createTestSandboxProvider() {
 
   const provider = defineSandboxProvider({
     name: TEST_SANDBOX_PROVIDER_NAME,
-    // `start` reopens a session's sandbox by session id, as Vercel Sandbox and just-bash do.
-    environment: () =>
-      withSessionSandboxReopen({
-        async prepare() {
-          return null;
-        },
-        async resume(context: SandboxProviderSessionContext) {
-          events.push(`resume:${context.session.id}`);
-          return createHandle(context.session.id);
-        },
-        async start(context: SandboxProviderSessionContext) {
-          events.push(`start:${context.session.id}`);
-          return { handle: createHandle(context.session.id), state: null };
-        },
-      }),
+    environment: () => ({
+      async prepare() {
+        return null;
+      },
+      async resume(context: SandboxProviderSessionContext) {
+        events.push(`resume:${context.session.id}`);
+        return createHandle(context.session.id);
+      },
+      async start(context: SandboxProviderSessionContext) {
+        events.push(`start:${context.session.id}`);
+        return { handle: createHandle(context.session.id), state: null };
+      },
+    }),
   });
   return {
     clear: () => {

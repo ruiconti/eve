@@ -3,9 +3,9 @@ import { getSandboxEnvironmentRuntime } from "#shared/sandbox-environment.js";
 import type { SandboxProviderHandle, SandboxProviderRuntime } from "#shared/sandbox-provider.js";
 
 /*
- * Keyed tool sessions and workflow steps open a session's sandbox outside its
- * turns through the provider's own `start`, which must find that sandbox again
- * from the session id alone. Only eve's bindings that do so opt in, and the
+ * Keyed tool sessions open a session's sandbox outside any turn through the
+ * provider's own `start`, which must find that sandbox again from the session
+ * id alone. Only eve's bindings that do so opt in, and the
  * marker stays internal so the public provider API is unchanged.
  */
 

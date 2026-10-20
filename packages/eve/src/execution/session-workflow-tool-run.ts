@@ -1,4 +1,6 @@
 import { deliverWorkflowAuthorization } from "#execution/tools/workflow/owner.js";
+import { openSessionSandboxStep } from "#execution/tools/workflow/open-session-sandbox-step.js";
+import { resumeHookStep } from "#execution/tools/workflow/resume-hook-step.js";
 import type { AppliedRunMessage } from "#execution/tools/workflow/apply-run-messages-step.js";
 import {
   runMessageBatchBudget,
@@ -33,12 +35,7 @@ interface HandlerInput<T> {
 }
 
 export function isAppliedRunMessage(message: WorkflowToolRunMessage): message is AppliedRunMessage {
-  return (
-    message.kind === "agent-started" ||
-    message.kind === "report" ||
-    message.kind === "sandbox-started" ||
-    isTaskRunMessage(message)
-  );
+  return message.kind === "agent-started" || message.kind === "report" || isTaskRunMessage(message);
 }
 
 /**
@@ -108,6 +105,12 @@ async function handleWorkflowToolRunRequest(
   input: HandlerInput<WorkflowToolRunRequestMessage>,
 ): Promise<void> {
   const { cursor, message } = input;
+  if (message.request.kind === "sandbox-request") {
+    // Replies once the session recorded the sandbox, so no step uses one the session could lose.
+    const { reply } = await cursor.advance((state) => openSessionSandboxStep(state));
+    await resumeHookStep(message.replyTo, reply, { ifPresent: true });
+    return;
+  }
   if (message.request.kind === "authorization-request") {
     const request = message.request;
     await deliverWorkflowAuthorization({ ...message, request }, async () => {

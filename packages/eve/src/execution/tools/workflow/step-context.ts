@@ -25,22 +25,20 @@ export interface WorkflowStepSandbox {
   /** The session whose sandbox the caller uses: its own, or the owner's it inherits. */
   readonly sessionId: string;
   /**
-   * The session's sandbox state when the call was made. A step resumes it, as
-   * the session's later turns do, instead of rerunning the sandbox definition
-   * on a sandbox the session already set up.
+   * The session's recorded sandbox state, which the step resumes: captured
+   * when the call was made, or sent by the session when an earlier step of
+   * the call asked it to open its sandbox. Without one the step asks.
    */
   readonly state?: SandboxState;
 }
 
 export type WorkflowStepResult = {
   readonly authorized: readonly string[];
-  /** The state of the session's sandbox when the step started it, which the session records. */
-  readonly sandboxState?: SandboxState;
 } & (
   | { readonly kind: "result"; readonly output: unknown }
-  /** The step failed for good after it started the session's sandbox, which `sandboxState` carries. */
-  | { readonly kind: "failed"; readonly error: Error }
   | { readonly kind: "authorization-required"; readonly signal: AuthorizationSignal }
+  /** The step asked for the session's sandbox, which the session has not opened yet. */
+  | { readonly kind: "sandbox-required" }
 );
 
 /** Compiler-owned envelope; contextIndexes marks arguments replaced with step-local context. */

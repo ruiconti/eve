@@ -45,8 +45,23 @@ export interface WorkflowToolInputRequestBatch {
   readonly requests: readonly InputRequest[];
 }
 
+/**
+ * A step asked for the session's sandbox before the session opened one. The
+ * session opens it as its turns would and replies with the state the step
+ * resumes, or with why it could not.
+ */
+export interface WorkflowToolSandboxRequest {
+  readonly kind: "sandbox-request";
+}
+
+/** The session's answer to a {@link WorkflowToolSandboxRequest}. */
+export type WorkflowToolSandboxReply =
+  | { readonly kind: "opened"; readonly state: SandboxState }
+  | { readonly kind: "failed"; readonly message: string };
+
 export type WorkflowToolRequest =
   | WorkflowToolAuthorizationRequest
+  | WorkflowToolSandboxRequest
   | WorkflowToolAskRequest
   | InputRequest
   | WorkflowToolInputRequestBatch;
@@ -141,16 +156,6 @@ export interface WorkflowToolRunUsageMessage {
   readonly usage: TokenUsage;
 }
 
-/**
- * A step started the session's sandbox, which the session had not opened
- * yet. The session records the sandbox's state unless it recorded its own
- * first, so the sandbox ends with the session.
- */
-export interface WorkflowToolRunSandboxStartedMessage {
-  readonly from: WorkflowToolRunRef;
-  readonly state: SandboxState;
-}
-
 /** A task's run can take commands: its control hook is registered. */
 export interface WorkflowToolRunStartedMessage {
   readonly from: WorkflowToolRunRef;
@@ -160,7 +165,6 @@ export type WorkflowToolRunMessage =
   | ({ readonly kind: "agent-started" } & WorkflowToolRunAgentStartedMessage)
   | ({ readonly kind: "started" } & WorkflowToolRunStartedMessage)
   | ({ readonly kind: "report" } & WorkflowToolRunReport)
-  | ({ readonly kind: "sandbox-started" } & WorkflowToolRunSandboxStartedMessage)
   | ({ readonly kind: "reply" } & WorkflowToolRunReplyMessage)
   | ({ readonly kind: "request" } & WorkflowToolRunRequestMessage)
   | ({ readonly kind: "withdraw" } & WorkflowToolRunWithdrawMessage)

@@ -1,7 +1,7 @@
 import { defineAgent } from "eve";
 import { mockModel, type MockModelRequest, type MockModelResponse } from "eve/evals";
 
-const STEPS = ["seed_note", "prepare_note", "read_note"] as const;
+const STEPS = ["prepare_note", "read_note"] as const;
 
 export default defineAgent({
   description: "Prepares a note in its sandbox from a workflow step and reads it back.",

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { environment } from "../sandbox.js";
 
 export default defineWorkflowTool({
-  description: "Prepares the note from the seed in a workflow step.",
+  description: "Prepares the note in a workflow step.",
   inputSchema: z.object({}),
   async execute(_input, ctx) {
     "use workflow";
@@ -14,12 +14,12 @@ export default defineWorkflowTool({
 
 async function prepareNote(ctx: WorkflowStepToolContext) {
   "use step";
+  // The session has not opened its sandbox yet, so it opens it for this step.
   // The step imports its own copy of the environment the session's sandbox uses.
   const sandbox = await ctx.getSandbox(environment);
-  const seed = await sandbox.readTextFile({ path: "/workspace/step-seed.txt" });
   // Writing the whole file keeps a retried step's write the same.
   await sandbox.writeTextFile({
-    content: `${seed}:prepared-in-step`,
+    content: "step-sandbox-note-ok-H3R:prepared-in-step",
     path: "/workspace/step-note.txt",
   });
   return "prepared";

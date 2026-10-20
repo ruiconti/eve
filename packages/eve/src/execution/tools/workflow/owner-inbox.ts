@@ -112,6 +112,8 @@ function normalizeInputRequest(
   switch (request.kind) {
     case "authorization-request":
       throw new TypeError("A workflow authorization event cannot be normalized as human input.");
+    case "sandbox-request":
+      throw new TypeError("A workflow sandbox request cannot be normalized as human input.");
     case "ask":
       return normalizeAskRequest(request.request, from, requestId);
     default:

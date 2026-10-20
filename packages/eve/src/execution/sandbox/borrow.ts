@@ -17,11 +17,11 @@ export interface BorrowedSandbox {
 /**
  * Opens a session's sandbox for a caller outside its turns, on the first
  * `get()`: resumed from `state` when the session recorded one, or else found
- * or created through the provider's `start`, which reopens it by session id,
- * so it is the sandbox the session's own `start` finds. Concurrent first opens
- * in this process share one start. The caller never owns the sandbox: a
- * failed start never deletes it, `delete()` throws, and `release` only lets go
- * of this caller's handle, so an overlapping caller keeps its own.
+ * or created through the provider's `start`, which then must reopen it by
+ * session id, so it is the sandbox the session's own `start` finds. The
+ * caller never owns the sandbox: a failed start never deletes it, `delete()`
+ * throws, and `release` only lets go of this caller's handle, so an
+ * overlapping caller keeps its own.
  */
 export async function borrowSessionSandbox(input: {
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
@@ -29,8 +29,11 @@ export async function borrowSessionSandbox(input: {
   readonly registry: RuntimeSandboxRegistry;
   readonly sessionId: string;
   readonly state?: SandboxState;
-  /** The error for a provider whose `start` cannot reopen a session's sandbox. */
-  readonly unsupported: (providerName: string) => Error;
+  /**
+   * The error for a provider whose `start` cannot reopen a session's sandbox,
+   * for a caller that may start it. Omit it when `state` is always recorded.
+   */
+  readonly unsupported?: (providerName: string) => Error;
 }): Promise<BorrowedSandbox> {
   const { registry } = input;
   const inner = await ensureSandboxAccess({
@@ -45,8 +48,10 @@ export async function borrowSessionSandbox(input: {
     access: {
       ...inner,
       async get() {
-        const providerName = providerWithoutSessionReopen(registry);
-        if (providerName !== undefined) throw input.unsupported(providerName);
+        if (input.unsupported !== undefined) {
+          const providerName = providerWithoutSessionReopen(registry);
+          if (providerName !== undefined) throw input.unsupported(providerName);
+        }
         return await inner.get();
       },
     },

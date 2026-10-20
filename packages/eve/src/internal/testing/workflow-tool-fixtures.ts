@@ -53,16 +53,28 @@ async function prepareSandboxStep(service: string, ctx: WorkflowStepToolContext)
   return { seed };
 }
 
-export async function sandboxPrepareThenReadWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+export async function sandboxParallelPrepareWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
-  await prepareSandboxStep(input.service, ctx);
-  return await readPreparedStep(ctx);
+  await Promise.all([
+    writeSandboxFileStep(ctx, "plan", input.service),
+    writeSandboxFileStep(ctx, "config", input.service),
+  ]);
+  return await readSandboxFilesStep(ctx);
 }
 
-async function readPreparedStep(ctx: WorkflowStepToolContext) {
+async function writeSandboxFileStep(ctx: WorkflowStepToolContext, name: string, service: string) {
   "use step";
   const sandbox = await ctx.getSandbox();
-  return { prepared: await sandbox.readTextFile({ path: "/workspace/prepared.txt" }) };
+  await sandbox.writeTextFile({ content: `${name}:${service}`, path: `/workspace/${name}.txt` });
+}
+
+async function readSandboxFilesStep(ctx: WorkflowStepToolContext) {
+  "use step";
+  const sandbox = await ctx.getSandbox();
+  return {
+    config: await sandbox.readTextFile({ path: "/workspace/config.txt" }),
+    plan: await sandbox.readTextFile({ path: "/workspace/plan.txt" }),
+  };
 }
 
 export async function sandboxPrepareThenFailWorkflow(input: DeployInput, ctx: WorkflowToolContext) {

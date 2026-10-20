@@ -14,8 +14,21 @@ import type {
   WorkflowStepResult,
 } from "#execution/tools/workflow/step-context.js";
 
+const hooks = vi.hoisted(() => ({ replies: [] as unknown[] }));
 vi.mock("#compiled/@workflow/core/index.js", () => ({
-  createHook: () => ({ token: "callback-token" }),
+  // Awaiting a hook yields its first payload. Only a reply hook waits for its registration,
+  // and it receives the next queued reply.
+  createHook: () => {
+    let deliver!: (value: unknown) => void;
+    const payload = new Promise((resolve) => (deliver = resolve));
+    return Object.assign(payload, {
+      token: "reply-token",
+      getConflict: async () => {
+        deliver(hooks.replies.shift());
+        return null;
+      },
+    });
+  },
   getWorkflowMetadata: () => ({ url: "https://agent.example", workflowRunId: "run" }),
 }));
 vi.mock("#execution/hook-ownership.js", () => ({ disposeHook: async () => {} }));
@@ -49,9 +62,9 @@ it("preserves the SDK step reference and bind metadata through serialization", a
   });
 });
 
-it("resumes a sandbox an earlier step of the same call started, and reports it once", async () => {
-  const started = {
-    session: { providerName: "keyed", state: { key: "s" }, stateProtocolVersion: 1 },
+it("asks the session for its sandbox once per call and runs the step again with its state", async () => {
+  const opened = {
+    session: { providerName: "custom", state: { id: "sbx" }, stateProtocolVersion: 1 },
   };
   const sent: unknown[] = [];
   const run = {
@@ -66,39 +79,30 @@ it("resumes a sandbox an earlier step of the same call started, and reports it o
   attachWorkflowToolRunContext(ctx, run);
   const received: unknown[] = [];
   const execute = vi.fn(async (invocation: WorkflowStepInvocation): Promise<WorkflowStepResult> => {
-    received.push(invocation.context.sandbox.state);
-    // Only the first step finds the sandbox unopened and starts it.
-    return received.length === 1
-      ? { authorized: [], kind: "result", output: null, sandboxState: started }
-      : { authorized: [], kind: "result", output: null };
+    const { state } = invocation.context.sandbox;
+    received.push(state);
+    return state?.session == null
+      ? { authorized: [], kind: "sandbox-required" }
+      : { authorized: [], kind: "result", output: "done" };
   });
   const step = workflowToolStep(vi.fn(), execute);
-  await step(ctx);
-  await step(ctx);
-  // A serve task's next call reads its own state: the session may have deleted the sandbox since.
+  const request = {
+    from: { callId: "call-a" },
+    kind: "request",
+    replyTo: "reply-token",
+    request: { kind: "sandbox-request" },
+  };
+  hooks.replies.push({ kind: "opened", state: opened });
+  await expect(step(ctx)).resolves.toBe("done");
+  // A later step of the same call resumes the state the session sent.
+  await expect(step(ctx)).resolves.toBe("done");
+  expect(received).toEqual([undefined, opened, opened]);
+  expect(sent).toEqual([request]);
+
+  // A serve task's next call asks again; the session's answer can be that it could not open one.
   ctx.callId = "call-b";
   run.from = { callId: "call-b" } as WorkflowToolRunRef;
-  run.agentContext = {
-    bundle: { source: { kind: "bundled" } },
-    sandbox: { sessionId: "session", state: { session: null } },
-  } as AgentSessionContext;
-  await step(ctx);
-  expect(received).toEqual([undefined, started, { session: null }]);
-  expect(sent).toEqual([{ from: { callId: "call-a" }, kind: "sandbox-started", state: started }]);
-
-  // A step that started the sandbox and failed for good reports it, then fails with its own error.
-  const failure = new Error("deploy failed");
-  execute.mockResolvedValueOnce({
-    authorized: [],
-    error: failure,
-    kind: "failed",
-    sandboxState: started,
-  });
-  await expect(step(ctx)).rejects.toBe(failure);
-  expect(sent).toHaveLength(2);
-  expect(sent.at(-1)).toEqual({
-    from: { callId: "call-b" },
-    kind: "sandbox-started",
-    state: started,
-  });
+  hooks.replies.push({ kind: "failed", message: "could not open the session's sandbox: quota" });
+  await expect(step(ctx)).rejects.toThrow("could not open the session's sandbox: quota");
+  expect(sent).toEqual([request, { ...request, from: { callId: "call-b" } }]);
 });

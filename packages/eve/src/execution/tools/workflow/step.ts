@@ -8,6 +8,8 @@ import {
 } from "#execution/tools/workflow/ask.js";
 import { disposeHook } from "#execution/hook-ownership.js";
 import { runSignIn } from "#harness/session-machine/transitions.js";
+import type { WorkflowToolSandboxReply } from "#execution/tools/workflow/messages.js";
+import type { SandboxState } from "#sandbox/state.js";
 import type {
   WorkflowStepAuthorizationResult,
   WorkflowStepContext,
@@ -83,22 +85,6 @@ async function executeAuthorizedStep(
         throw error;
       }
 
-      // Relayed before the run's outcome, so the session records the sandbox before the call settles.
-      if (result.sandboxState !== undefined) {
-        run.startedSandbox = { callId: ctx.callId, state: result.sandboxState };
-        await run.owner.send({
-          from: run.from,
-          kind: "sandbox-started",
-          state: result.sandboxState,
-        });
-      }
-      if (result.kind === "failed") {
-        if (!ctx.abortSignal.aborted) {
-          await reportPendingAsFailed(run, ctx.abortSignal, pending);
-        }
-        throw result.error;
-      }
-
       await reconcileCompletedAuthorizations(
         run,
         ctx.abortSignal,
@@ -110,6 +96,19 @@ async function executeAuthorizedStep(
       if (result.kind === "result") {
         await reportPendingAsFailed(run, ctx.abortSignal, pending);
         return result.output;
+      }
+
+      if (result.kind === "sandbox-required") {
+        try {
+          const state = await requestSessionSandbox(run, ctx.abortSignal);
+          run.sessionSandbox = { callId: ctx.callId, state };
+        } catch (error) {
+          if (!ctx.abortSignal.aborted) {
+            await reportPendingAsFailed(run, ctx.abortSignal, pending);
+          }
+          throw error;
+        }
+        continue;
       }
 
       await collectAuthorizationCallbacks({
@@ -136,7 +135,7 @@ async function invokeAuthorizedStep(input: {
   readonly run: WorkflowToolRunContext;
 }): Promise<WorkflowStepResult> {
   const { args, authorizationResults, callbackToken, ctx, execute, receiver, run } = input;
-  const started = run.startedSandbox?.callId === ctx.callId ? run.startedSandbox.state : undefined;
+  const received = run.sessionSandbox?.callId === ctx.callId ? run.sessionSandbox.state : undefined;
   const context: WorkflowStepContext = {
     callId: ctx.callId,
     toolName: ctx.toolName,
@@ -148,7 +147,7 @@ async function invokeAuthorizedStep(input: {
     sandbox: {
       bundle: run.agentContext.bundle,
       sessionId: run.agentContext.sandbox.sessionId,
-      state: started ?? run.agentContext.sandbox.state,
+      state: received ?? run.agentContext.sandbox.state,
     },
   };
   const invocation: WorkflowStepInvocation = {
@@ -269,6 +268,36 @@ async function reportAuthorization(
     await withAbort(acknowledged, signal);
   } finally {
     await disposeHook(acknowledged);
+  }
+}
+
+/**
+ * Asks the session to open its sandbox, which it had not when the call was
+ * made, and returns the state the step resumes. Only the session allocates
+ * its sandbox, so the session records it and ends it with the session.
+ */
+async function requestSessionSandbox(
+  run: WorkflowToolRunContext,
+  signal: AbortSignal,
+): Promise<SandboxState> {
+  const reply = createHook<WorkflowToolSandboxReply>();
+  try {
+    // Waits for registration, as for an authorization acknowledgement.
+    await reply.getConflict();
+    await withAbort(
+      run.owner.send({
+        kind: "request",
+        from: run.from,
+        replyTo: reply.token,
+        request: { kind: "sandbox-request" },
+      }),
+      signal,
+    );
+    const answer = await withAbort(reply, signal);
+    if (answer.kind === "failed") throw new Error(answer.message);
+    return answer.state;
+  } finally {
+    await disposeHook(reply);
   }
 }
 

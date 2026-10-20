@@ -181,75 +181,61 @@ describe("workflow step authorization", () => {
     expect(deleted).not.toHaveBeenCalled();
   });
 
-  it("resumes the sandbox the session set up instead of running its definition again", async () => {
+  it("resumes the session's recorded sandbox on any provider, and asks the session when there is none", async () => {
     let definitionRuns = 0;
-    bundle.registry = keyedSandboxes({
+    // A custom provider whose `start` cannot find a session's sandbox again.
+    const { registry, starts } = keyedSandboxes({
       failSelector: () => {
         definitionRuns += 1;
         return false;
       },
-    }).registry;
-    const open = async (ctx: ToolContext) => void (await ctx.getSandbox());
+      reopensBySessionId: false,
+    });
+    bundle.registry = registry;
+    const plan = { path: "/workspace/plan.txt" };
+    // Asking ends the step even when the step catches the error, and starts nothing.
+    const write = async (ctx: ToolContext) => {
+      try {
+        await (await ctx.getSandbox()).writeTextFile({ ...plan, content: "draft" });
+      } catch {}
+      return "written";
+    };
+    await expect(runStep(write)).resolves.toEqual({ authorized: [], kind: "sandbox-required" });
+    expect(starts).toEqual([]);
+    expect(definitionRuns).toBe(0);
+    // The session opened its sandbox and recorded it.
     const recorded = {
       session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
     };
-    // A session that has not opened its sandbox yet gets it through the definition, and records it.
-    await expect(runStep(open)).resolves.toMatchObject({ sandboxState: recorded });
-    expect(definitionRuns).toBe(1);
-    const resumed = await runStep(open, {
-      ...context(),
-      sandbox: { ...context().sandbox, state: recorded },
+    const withRecorded = { ...context(), sandbox: { ...context().sandbox, state: recorded } };
+    await expect(runStep(write, withRecorded)).resolves.toMatchObject({
+      kind: "result",
+      output: "written",
     });
-    expect(definitionRuns).toBe(1);
-    expect(resumed).not.toHaveProperty("sandboxState");
-    // A caller that shares its owner's sandbox leaves recording it to the owner.
-    const shared = await runStep(open, {
-      ...context(),
-      sandbox: { ...context().sandbox, sessionId: "owner-session" },
-    });
-    expect(shared).not.toHaveProperty("sandboxState");
-  });
-
-  it("reports a sandbox it started when it fails for good, and only then", async () => {
-    bundle.registry = keyedSandboxes().registry;
-    const failure = new Error("service unavailable");
-    const openThenFail = async (ctx: ToolContext) => {
-      await ctx.getSandbox();
-      throw failure;
-    };
-    // An attempt the SDK retries throws, and the retry reports the sandbox.
-    await expect(runStep(openThenFail)).rejects.toBe(failure);
-    durable.attempt = 4;
-    await expect(runStep(openThenFail)).resolves.toMatchObject({
-      error: failure,
-      kind: "failed",
-      sandboxState: { session: { providerName: "keyed" } },
-    });
-    // A fatal error ends the step at once; a step that opened nothing has nothing to report.
-    durable.attempt = 1;
-    const fatal = Object.assign(new Error("rejected"), { fatal: true });
     await expect(
-      runStep(async (ctx) => {
-        await ctx.getSandbox();
-        throw fatal;
-      }),
-    ).resolves.toMatchObject({ error: fatal, kind: "failed" });
-    await expect(
-      runStep(async () => {
-        throw fatal;
-      }),
-    ).rejects.toBe(fatal);
+      runStep(async (ctx) => await (await ctx.getSandbox()).readTextFile(plan), withRecorded),
+    ).resolves.toMatchObject({ kind: "result", output: "draft" });
+    expect(definitionRuns).toBe(0);
   });
 
   it("accepts its own copy of the session's environment and leaves stopping and deleting to the session", async () => {
     const { deleted, provider, registry, stopped } = keyedSandboxes();
     bundle.registry = registry;
+    const input: WorkflowStepContext = {
+      ...context(),
+      sandbox: {
+        ...context().sandbox,
+        state: {
+          session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
+        },
+      },
+    };
     // The step imports its own copy of the module that declares the environment.
     await expect(
       runStep(async (ctx) => {
         await ctx.getSandbox(provider.environment());
         return "opened";
-      }),
+      }, input),
     ).resolves.toMatchObject({ output: "opened" });
     const other = defineSandboxProvider({
       name: "other",
@@ -261,26 +247,13 @@ describe("workflow step authorization", () => {
       ["sandbox.delete() is unavailable", async (ctx) => await (await ctx.getSandbox()).delete()],
     ];
     for (const [message, access] of misuse) {
-      // A step that opened the sandbox first returns its error with the sandbox it started.
-      const outcome = await runStep(access).then(
-        (result) => (result.kind === "failed" ? result.error : result),
-        (error: unknown) => error,
-      );
-      expect(outcome).toMatchObject({ fatal: true, message: expect.stringContaining(message) });
+      await expect(runStep(access, input)).rejects.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(message),
+      });
     }
     expect(stopped).not.toHaveBeenCalled();
     expect(deleted).not.toHaveBeenCalled();
-  });
-
-  it("fails ctx.getSandbox() without retrying on a provider that cannot reopen the session's sandbox", async () => {
-    bundle.registry = keyedSandboxes({ reopensBySessionId: false }).registry;
-    await expect(runStep((ctx) => ctx.getSandbox())).rejects.toMatchObject({
-      fatal: true,
-      message:
-        'ctx.getSandbox() is unavailable inside a "use step" function of tool "devbox": ' +
-        'sandbox provider "keyed" cannot reopen the session\'s sandbox outside its turns. ' +
-        "Use Vercel Sandbox or just-bash for the agent's sandbox, or move the sandbox work into a tool defined with defineTool().",
-    });
   });
 
   it("does not exchange a consumed code again when the rest of the step retries", async () => {
