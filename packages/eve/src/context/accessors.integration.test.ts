@@ -124,22 +124,27 @@ describe("buildCallbackContext – getSandbox", () => {
     expect(sandbox.commandLog).toEqual(["echo ready"]);
   });
 
-  it("accepts the configured sandbox environment", async () => {
+  it("accepts the configured sandbox environment, or a copy of it", async () => {
     const environment = VercelSandbox.environment();
+    // A workflow step can import its own copy of the module that declares the environment.
+    const copy = VercelSandbox.environment();
     const sandbox = mockSandbox();
     const runtime = await createTestRuntime();
 
     const live = await runtime.runAsSession(
       { sandboxAccess: { ...sandbox.access, environment } },
-      async () => await buildCallbackContext().getSandbox(environment),
+      async () => [
+        await buildCallbackContext().getSandbox(environment),
+        await buildCallbackContext().getSandbox(copy),
+      ],
     );
 
-    expect(live).toBeDefined();
+    expect(live).toHaveLength(2);
   });
 
   it("rejects a sandbox environment that is not active for the session", async () => {
     const environment = VercelSandbox.environment();
-    const otherEnvironment = VercelSandbox.environment();
+    const otherEnvironment = VercelSandbox.environment({ timeout: 60_000 });
     const sandbox = mockSandbox();
     const runtime = await createTestRuntime();
 
