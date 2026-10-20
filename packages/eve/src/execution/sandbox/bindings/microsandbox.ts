@@ -57,7 +57,6 @@ export function createMicrosandboxSandboxProvider(
     async onSessionEnd(context, state) {
       await deleteMicrosandboxSession({
         context,
-        options,
         sessionIdentity: state?.sessionIdentity ?? microsandboxSessionIdentity(context),
       });
     },

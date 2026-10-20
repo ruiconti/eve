@@ -44,6 +44,7 @@ import {
   createStableHash,
   doesPathExist,
   loadMicrosandboxModule,
+  loadMicrosandboxWithoutInstall,
   type MicrosandboxVm,
   removeSandboxIfExists,
   removeSnapshotIfExists,
@@ -334,7 +335,6 @@ export async function createMicrosandboxHandle(input: {
 /** Deletes the session's VM, its saved state, and its metadata, whichever exist. */
 export async function deleteMicrosandboxSession(input: {
   readonly context: SandboxProviderSessionContext;
-  readonly options: ResolvedMicrosandboxOptions;
   readonly sessionIdentity: string;
 }): Promise<void> {
   const sessionRootPath = resolveMicrosandboxSessionRootPath(
@@ -345,14 +345,16 @@ export async function deleteMicrosandboxSession(input: {
   if (active !== undefined) {
     await active.onSandboxDelete();
   } else {
-    const metadata = await readSessionMetadata(resolveMicrosandboxMetadataPath(sessionRootPath));
-    if (metadata !== null) {
-      const module = await loadMicrosandboxModule({
-        host: input.context.host,
-        options: input.options,
-      });
-      await removeSandboxIfExists(module, metadata.sandboxName);
-      if (metadata.stateSnapshotName !== undefined) {
+    // Without the runtime installed, no VM can exist.
+    const module = await loadMicrosandboxWithoutInstall(input.context.host.resolveProjectPath("."));
+    if (module !== null) {
+      const metadata = await readSessionMetadata(resolveMicrosandboxMetadataPath(sessionRootPath));
+      // A VM exists under its identity's name before its metadata is written.
+      await removeSandboxIfExists(
+        module,
+        metadata?.sandboxName ?? createProviderName("eve-sbx-ses", input.sessionIdentity),
+      );
+      if (metadata?.stateSnapshotName !== undefined) {
         await removeSnapshotIfExists(module, metadata.stateSnapshotName);
       }
     }

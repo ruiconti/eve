@@ -300,7 +300,10 @@ describe("just-bash sandbox file API", () => {
 
     await firstHandle.onSandboxStop();
 
-    expect(state).toEqual({ version: 3 });
+    expect(state).toMatchObject({ version: 2 });
+    await expect(
+      readFile(join(state.rootPath, "fs", "workspace", "persisted.txt"), "utf8"),
+    ).resolves.toBe("survives reconnect");
 
     const reconnectedHandle = await provider.openSession({
       existing: state,

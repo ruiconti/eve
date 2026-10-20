@@ -248,7 +248,12 @@ export async function ensureSandboxAccess(
       return await resumePersisted(context);
     }
 
-    const startKey = `${registered.inheritance?.nodeId ?? input.nodeId}\0${input.sessionId}`;
+    // Apps hosted in one process can reuse a node id and a tool session id.
+    const startKey = [
+      appRoot,
+      registered.inheritance?.nodeId ?? input.nodeId,
+      input.sessionId,
+    ].join("\0");
     // A failed start wakes every waiter at once; re-check so only one retries.
     let concurrentStart = pendingSandboxStarts.get(startKey);
     while (concurrentStart !== undefined) {

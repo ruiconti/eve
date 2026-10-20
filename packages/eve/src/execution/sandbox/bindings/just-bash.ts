@@ -43,8 +43,7 @@ export const JUST_BASH_PROVIDER_NAME = "just-bash";
 
 // Holds the template key, not its path: the build and runtime app roots can differ.
 type JustBashPreparedArtifact = { readonly templateKey: string };
-// The session's root derives from its key alone, so the state records nothing else.
-type JustBashSessionState = { readonly version: 3 };
+type JustBashSessionState = { readonly rootPath: string; readonly version: 2 };
 
 export function createJustBashSandboxProvider(
   authoredOptions: JustBashSandboxCreateOptions | undefined = undefined,
@@ -64,8 +63,8 @@ export function createJustBashSandboxProvider(
   };
 
   return {
-    async onSessionEnd(context) {
-      await rm(sessionRootPath(context), { force: true, recursive: true });
+    async onSessionEnd(context, state) {
+      await rm(state?.rootPath ?? sessionRootPath(context), { force: true, recursive: true });
     },
     async prepare(context) {
       const templateKey = createSandboxProviderIdentity({
@@ -120,8 +119,7 @@ export function createJustBashSandboxProvider(
       return { templateKey };
     },
     async resume(context, _artifact, stateValue) {
-      requireJustBashSessionState(stateValue);
-      const rootPath = sessionRootPath(context);
+      const { rootPath } = requireJustBashSessionState(stateValue);
       if (!(await pathExists(rootPath))) {
         throw new Error(`just-bash session root "${rootPath}" no longer exists.`);
       }
@@ -134,7 +132,10 @@ export function createJustBashSandboxProvider(
         resolveTemplateRootPath(context.storagePath, artifact.templateKey),
         rootPath,
       );
-      return { handle: await openHandle(context, rootPath, options), state: { version: 3 } };
+      return {
+        handle: await openHandle(context, rootPath, options),
+        state: { rootPath, version: 2 },
+      };
     },
   };
 }
@@ -235,10 +236,14 @@ function requirePreparedJustBashArtifact(
 }
 
 function requireJustBashSessionState(state: SandboxPreparedArtifact): JustBashSessionState {
-  if (!isSandboxPreparedArtifactRecord(state) || state.version !== 3) {
+  if (
+    !isSandboxPreparedArtifactRecord(state) ||
+    state.version !== 2 ||
+    typeof state.rootPath !== "string"
+  ) {
     throw new Error("Invalid just-bash session state.");
   }
-  return { version: 3 };
+  return { rootPath: state.rootPath, version: 2 };
 }
 
 function resolveTemplateRootPath(storagePath: string, key: string): string {
