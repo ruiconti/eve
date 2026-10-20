@@ -15,7 +15,8 @@ import { defineSandboxProvider } from "#shared/sandbox-provider.js";
  * registry is a child's that shares its owner's sandbox definition. Each open
  * hands out its own handle over the shared sandbox, as just-bash runs one
  * interpreter per handle; `released` records which handles a caller let go
- * of, and `stopped` which were stopped through the sandbox API.
+ * of, `stopped` which were stopped through the sandbox API, and `shutDown`
+ * which the runtime's shutdown stopped.
  */
 export function keyedSandboxes(
   options: {
@@ -29,6 +30,7 @@ export function keyedSandboxes(
   const starts: string[] = [];
   const handles: object[] = [];
   const released: object[] = [];
+  const shutDown: object[] = [];
   const stopped: Mock<() => Promise<void>> = vi.fn(async () => {});
   const deleted: Mock<(key: string) => void> = vi.fn((key: string) => void live.delete(key));
   const reopen = (key: string) => {
@@ -40,7 +42,7 @@ export function keyedSandboxes(
     }
     const handle = {
       sandbox: entry.sandbox.session,
-      onRuntimeShutdown: async () => {},
+      onRuntimeShutdown: async () => void shutDown.push(handle),
       onSandboxDelete: async () => deleted(key),
       onSandboxStop: stopped,
     };
@@ -103,5 +105,16 @@ export function keyedSandboxes(
           }
         : { definition, workspaceResourceRoot },
   };
-  return { deleted, environment, handles, live, provider, registry, released, starts, stopped };
+  return {
+    deleted,
+    environment,
+    handles,
+    live,
+    provider,
+    registry,
+    released,
+    shutDown,
+    starts,
+    stopped,
+  };
 }

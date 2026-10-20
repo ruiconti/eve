@@ -29,6 +29,8 @@ export async function borrowSessionSandbox(input: {
   readonly registry: RuntimeSandboxRegistry;
   readonly sessionId: string;
   readonly state?: SandboxState;
+  /** `false` when the session's own handle for the sandbox is tracked in this process. */
+  readonly tracksHandle?: boolean;
   /**
    * The error for a provider whose `start` cannot reopen a session's sandbox,
    * for a caller that may start it. Omit it when `state` is always recorded.
@@ -43,6 +45,7 @@ export async function borrowSessionSandbox(input: {
     registry,
     sessionId: input.sessionId,
     state: input.state ?? null,
+    tracksHandle: input.tracksHandle,
   });
   return {
     access: {

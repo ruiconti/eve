@@ -151,6 +151,7 @@ function borrowStepSandbox(input: WorkflowStepContext) {
       registry: node.sandboxRegistry,
       sessionId,
       state: recorded,
+      tracksHandle: false,
     });
   };
   const borrowOnce = (): Promise<BorrowedSandbox> => {

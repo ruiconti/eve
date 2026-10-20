@@ -14,6 +14,8 @@ import type { ToolContext } from "#tools/definition.js";
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
 import type { AuthorizationDefinition } from "#shared/connection-types.js";
 import { keyedSandboxes } from "#internal/testing/keyed-sandboxes.js";
+import { shutdownActiveSandboxHandles } from "#execution/sandbox/active-handles.js";
+import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import { withDevelopmentWorkflowGeneration } from "#internal/workflow/development-generation-context.js";
 import {
   createBundledRuntimeCompiledArtifactsSource,
@@ -216,6 +218,34 @@ describe("workflow step authorization", () => {
       runStep(async (ctx) => await (await ctx.getSandbox()).readTextFile(plan), withRecorded),
     ).resolves.toMatchObject({ kind: "result", output: "draft" });
     expect(definitionRuns).toBe(0);
+  });
+
+  it("leaves the session's handle tracked for runtime shutdown after a step borrows the sandbox", async () => {
+    await shutdownActiveSandboxHandles();
+    const { handles, registry, shutDown } = keyedSandboxes();
+    bundle.registry = registry;
+    const recorded = {
+      session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
+    };
+    // The session's turn opened its sandbox in this process.
+    const session = await ensureSandboxAccess({
+      compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+      nodeId: "__root__",
+      registry,
+      sessionId: "session-1",
+      state: recorded,
+    });
+    await session.get();
+    const sessionHandle = handles[0];
+    await expect(
+      runStep(async (ctx) => void (await ctx.getSandbox()), {
+        ...context(),
+        sandbox: { ...context().sandbox, state: recorded },
+      }),
+    ).resolves.toMatchObject({ kind: "result" });
+    await shutdownActiveSandboxHandles();
+    expect(handles).toHaveLength(2);
+    expect(shutDown).toEqual([sessionHandle]);
   });
 
   it("accepts its own copy of the session's environment and leaves stopping and deleting to the session", async () => {
