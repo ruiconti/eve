@@ -1,3 +1,8 @@
+import {
+  readDurableSession,
+  replaceDurableSessionSnapshot,
+  type DurableSessionState,
+} from "#execution/durable-session-store.js";
 import { publishSessionEvents, type SessionStepState } from "#execution/publish-session-events.js";
 import {
   withSessionStateDelta,
@@ -15,6 +20,7 @@ import {
   createAgentStartedEvent,
   type UnstampedMessageStreamEvent,
 } from "#protocol/message.js";
+import type { SandboxState } from "#sandbox/state.js";
 import type { JsonValue } from "#shared/json.js";
 
 /** A workflow tool run's `ctx.report()` update, as `action.partial`. */
@@ -56,9 +62,31 @@ function agentStartedEvent(
   });
 }
 
+/**
+ * Records the state of a sandbox a run's step started for this session, so
+ * the session resumes it and deletes it when the session ends. State the
+ * session recorded itself, such as from opening the same sandbox meanwhile,
+ * stays.
+ */
+function adoptStartedSandbox(
+  sessionState: DurableSessionState,
+  sandboxState: SandboxState,
+): DurableSessionState {
+  const session = readDurableSession(sessionState);
+  const recorded = session.sandboxState?.session;
+  if (recorded !== undefined && recorded !== null) return sessionState;
+  return replaceDurableSessionSnapshot({
+    session: { ...session, sandboxState },
+    state: sessionState,
+  });
+}
+
 /** A run's message the session applies as it reads it, which answers no call a turn waits on. */
 export type AppliedRunMessage =
-  | Extract<WorkflowToolRunMessage, { readonly kind: "agent-started" | "report" }>
+  | Extract<
+      WorkflowToolRunMessage,
+      { readonly kind: "agent-started" | "report" | "sandbox-started" }
+    >
   // Only a task's run reports these to the task table; an `execute` run's outcome answers its call.
   | (TaskRunMessage & { readonly from: { readonly taskId: string } });
 
@@ -96,6 +124,8 @@ export async function applyRunMessagesStep(
         events.push(agentStartedEvent(state.sessionState.sessionId, message));
       } else if (message.kind === "report") {
         events.push(workflowToolRunReportEvent(message.from, message.update));
+      } else if (message.kind === "sandbox-started") {
+        state = { ...state, sessionState: adoptStartedSandbox(state.sessionState, message.state) };
       } else {
         await publish();
         state = { ...state, ...(await applyTaskRunMessage({ ...state, message })) };

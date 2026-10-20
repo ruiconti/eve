@@ -141,6 +141,62 @@ describe("workflow tools", () => {
     expect(consoleOutput.unexpected(workflowSdkNotice.fatalStep)).toEqual([]);
   });
 
+  it("records a sandbox a step started, which the session resumes and deletes when it ends", async () => {
+    const readBySession: (string | null)[] = [];
+    const runtime = await createWorkflowToolRuntime({
+      agentName: "workflow-step-sandbox-first",
+      execute: sandboxPrepareWorkflow,
+      modules: [
+        {
+          logicalPath: "hooks/sandbox.ts",
+          loadNamespace: async () => ({
+            default: defineHook({
+              events: {
+                // The session's first open of its sandbox, after the step started it.
+                async "action.result"(_event, ctx) {
+                  const sandbox = await ctx.getSandbox();
+                  readBySession.push(
+                    await sandbox.readTextFile({ path: "/workspace/prepared.txt" }),
+                  );
+                },
+              },
+            }),
+          }),
+        },
+      ],
+      toolName: "deploy_service",
+    });
+
+    await runtime.run(async () => {
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: 'Run deploy_service with service "api"' },
+          serializedContext: buildWorkflowToolSerializedContext({
+            continuationToken: "schedule:workflow-step-sandbox-first",
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      try {
+        await stream.nextTurn();
+        await resumeSessionInbox(sessionCommandHookToken(run.runId), { kind: "reset" });
+        const terminal = await stream.nextTurn();
+        expect(filterEventsByType(terminal, "session.completed")).toHaveLength(1);
+      } finally {
+        stream.dispose();
+        if ((await run.status) === "running") await run.cancel();
+      }
+    });
+
+    expect(readBySession).toEqual(["prepared:api"]);
+    const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
+    // The step ran the definition once; the session resumed that sandbox, then deleted it.
+    expect(events.filter((event) => event === "definition")).toHaveLength(1);
+    expect(events.at(-1)).toBe("delete");
+  });
+
   it("shares the calling session's sandbox with a step helper in both directions", async () => {
     const readBySession: (string | null)[] = [];
     const runtime = await createWorkflowToolRuntime({

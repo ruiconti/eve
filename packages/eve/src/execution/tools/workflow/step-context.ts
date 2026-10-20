@@ -32,7 +32,11 @@ export interface WorkflowStepSandbox {
   readonly state?: SandboxState;
 }
 
-export type WorkflowStepResult = { readonly authorized: readonly string[] } & (
+export type WorkflowStepResult = {
+  readonly authorized: readonly string[];
+  /** The state of the session's sandbox when the step started it, which the session records. */
+  readonly sandboxState?: SandboxState;
+} & (
   | { readonly kind: "result"; readonly output: unknown }
   | { readonly kind: "authorization-required"; readonly signal: AuthorizationSignal }
 );

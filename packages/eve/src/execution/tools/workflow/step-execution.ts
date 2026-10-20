@@ -10,7 +10,7 @@ import {
   hasSameSandboxEnvironmentConfiguration,
   type SandboxEnvironmentIdentity,
 } from "#shared/sandbox-environment.js";
-import type { SandboxAccess } from "#sandbox/state.js";
+import type { SandboxAccess, SandboxState } from "#sandbox/state.js";
 import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import {
   isAuthorizationSignal,
@@ -89,6 +89,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
           ),
       });
       let output: unknown;
+      let sandboxState: SandboxState | undefined;
       try {
         output = await auth.run(() =>
           Reflect.apply(
@@ -97,6 +98,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
             args.map((arg, index) => (invocation.contextIndexes.includes(index) ? ctx : arg)),
           ),
         );
+        sandboxState = await sandbox.started();
       } catch (error) {
         // The Workflow SDK recognizes fatal=true; preserve eve's classified error fields.
         if (isConnectionAuthorizationFailedError(error) && !error.retryable) {
@@ -110,9 +112,10 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
       const authorized = input.authorizationResults
         .filter((result) => !remaining.includes(result))
         .map((result) => result.attemptId);
+      const reported = sandboxState === undefined ? {} : { sandboxState };
       return isAuthorizationSignal(output)
-        ? { kind: "authorization-required", signal: output, authorized }
-        : { kind: "result", output, authorized };
+        ? { kind: "authorization-required", signal: output, authorized, ...reported }
+        : { kind: "result", output, authorized, ...reported };
     });
   };
   // The SDK reads retry policy from the registered function at execution time.
@@ -133,6 +136,8 @@ function borrowStepSandbox(input: WorkflowStepContext) {
   const delivery = contextStorage.getStore();
   const resolveSource = () => resolveDurableCompiledArtifactsSource(bundle.source);
   let borrowing: Promise<BorrowedSandbox> | undefined;
+  // Only the session that owns its sandbox ends it, so only it records one a step started.
+  let callerOwnsSandbox = false;
   const borrow = async (): Promise<BorrowedSandbox> => {
     const compiled = await getCompiledRuntimeAgentBundle({
       compiledArtifactsSource:
@@ -140,6 +145,8 @@ function borrowStepSandbox(input: WorkflowStepContext) {
       nodeId: bundle.nodeId,
     });
     const node = compiled.graph.root;
+    callerOwnsSandbox =
+      sessionId === input.session.id && node.sandboxRegistry.sandbox?.definition.kind !== "parent";
     return await borrowSessionSandbox({
       compiledArtifactsSource: compiled.compiledArtifactsSource,
       nodeId: node.nodeId,
@@ -177,6 +184,17 @@ function borrowStepSandbox(input: WorkflowStepContext) {
             "The session's turns may be using the sandbox; eve lets go of the step's handle when the step ends.",
           ),
       };
+    },
+    /**
+     * The sandbox's state when the step started it: the session recorded
+     * none when it called the tool, and owns the sandbox the step opened.
+     */
+    async started(): Promise<SandboxState | undefined> {
+      if (state?.session !== undefined && state.session !== null) return undefined;
+      const borrowed = await borrowing?.catch(() => undefined);
+      if (borrowed === undefined || !callerOwnsSandbox) return undefined;
+      const opened = await borrowed.access.captureState();
+      return opened.session === null ? undefined : opened;
     },
     async release(): Promise<void> {
       const borrowed = await borrowing?.catch(() => undefined);

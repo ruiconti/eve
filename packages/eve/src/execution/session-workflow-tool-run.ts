@@ -33,7 +33,12 @@ interface HandlerInput<T> {
 }
 
 export function isAppliedRunMessage(message: WorkflowToolRunMessage): message is AppliedRunMessage {
-  return message.kind === "agent-started" || message.kind === "report" || isTaskRunMessage(message);
+  return (
+    message.kind === "agent-started" ||
+    message.kind === "report" ||
+    message.kind === "sandbox-started" ||
+    isTaskRunMessage(message)
+  );
 }
 
 /**

@@ -190,14 +190,24 @@ describe("workflow step authorization", () => {
       },
     }).registry;
     const open = async (ctx: ToolContext) => void (await ctx.getSandbox());
-    // A session that has not opened its sandbox yet gets it through the definition.
-    await runStep(open);
-    expect(definitionRuns).toBe(1);
     const recorded = {
       session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
     };
-    await runStep(open, { ...context(), sandbox: { ...context().sandbox, state: recorded } });
+    // A session that has not opened its sandbox yet gets it through the definition, and records it.
+    await expect(runStep(open)).resolves.toMatchObject({ sandboxState: recorded });
     expect(definitionRuns).toBe(1);
+    const resumed = await runStep(open, {
+      ...context(),
+      sandbox: { ...context().sandbox, state: recorded },
+    });
+    expect(definitionRuns).toBe(1);
+    expect(resumed).not.toHaveProperty("sandboxState");
+    // A caller that shares its owner's sandbox leaves recording it to the owner.
+    const shared = await runStep(open, {
+      ...context(),
+      sandbox: { ...context().sandbox, sessionId: "owner-session" },
+    });
+    expect(shared).not.toHaveProperty("sandboxState");
   });
 
   it("accepts its own copy of the session's environment and leaves stopping and deleting to the session", async () => {

@@ -4,6 +4,7 @@ import type { RemoteAgentBinding } from "#eve-channel/support.js";
 import type { SessionAuth } from "#context/session-context.js";
 import type { AgentSessionContext } from "#execution/agent-sessions/context.js";
 import type { AgentSessionAddress } from "#execution/agent-sessions/steps.js";
+import type { SandboxState } from "#sandbox/state.js";
 import type { InputRequest } from "#shared/input.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { TokenUsage } from "#shared/token-usage.js";
@@ -140,6 +141,16 @@ export interface WorkflowToolRunUsageMessage {
   readonly usage: TokenUsage;
 }
 
+/**
+ * A step started the session's sandbox, which the session had not opened
+ * yet. The session records the sandbox's state unless it recorded its own
+ * first, so the sandbox ends with the session.
+ */
+export interface WorkflowToolRunSandboxStartedMessage {
+  readonly from: WorkflowToolRunRef;
+  readonly state: SandboxState;
+}
+
 /** A task's run can take commands: its control hook is registered. */
 export interface WorkflowToolRunStartedMessage {
   readonly from: WorkflowToolRunRef;
@@ -149,6 +160,7 @@ export type WorkflowToolRunMessage =
   | ({ readonly kind: "agent-started" } & WorkflowToolRunAgentStartedMessage)
   | ({ readonly kind: "started" } & WorkflowToolRunStartedMessage)
   | ({ readonly kind: "report" } & WorkflowToolRunReport)
+  | ({ readonly kind: "sandbox-started" } & WorkflowToolRunSandboxStartedMessage)
   | ({ readonly kind: "reply" } & WorkflowToolRunReplyMessage)
   | ({ readonly kind: "request" } & WorkflowToolRunRequestMessage)
   | ({ readonly kind: "withdraw" } & WorkflowToolRunWithdrawMessage)

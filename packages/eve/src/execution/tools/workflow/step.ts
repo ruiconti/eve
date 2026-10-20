@@ -90,6 +90,14 @@ async function executeAuthorizedStep(
         authorizationResults,
         result.authorized,
       );
+      // Relayed before the run's outcome, so the session records the sandbox before the call settles.
+      if (result.sandboxState !== undefined) {
+        await run.owner.send({
+          from: run.from,
+          kind: "sandbox-started",
+          state: result.sandboxState,
+        });
+      }
 
       if (result.kind === "result") {
         await reportPendingAsFailed(run, ctx.abortSignal, pending);
