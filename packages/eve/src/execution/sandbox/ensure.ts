@@ -35,6 +35,7 @@ import {
   type SandboxProviderSessionContext,
 } from "#shared/sandbox-provider.js";
 import type { RuntimeSandboxSession } from "#shared/sandbox-session.js";
+import { SandboxSessionGoneError } from "#shared/sandbox-session-gone-error.js";
 import { SandboxTemplateNotProvisionedError } from "#shared/sandbox-template-error.js";
 
 interface EnsureSandboxAccessInput {
@@ -251,7 +252,12 @@ export async function ensureSandboxAccess(
     const session = { ...activeSession, id: input.sessionId };
 
     if (persisted !== null) {
-      return await resumePersisted(definition, session);
+      try {
+        return await resumePersisted(definition, session);
+      } catch (error) {
+        if (!(error instanceof SandboxSessionGoneError)) throw error;
+        persisted = null;
+      }
     }
 
     const startKey = `${inherited?.nodeId ?? input.nodeId}\0${input.sessionId}`;

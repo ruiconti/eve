@@ -231,7 +231,7 @@ export const AcmeSandbox = defineSandboxProvider<
 
 Provider handles implement `onSandboxStop()`, `onRuntimeShutdown()`, and `onSandboxDelete()`. These handle-level methods cover authored stop or delete calls, process shutdown, and failed initialization; `onSessionEnd()` is the single provider hook for durable terminal session cleanup.
 
-Open options belong to `start()` and are not serialized or passed to `resume()`. A provider must put any immutable option-derived data needed for reconnection in its session state. With the current immutable-state contract, `resume()` reconnects existing native state and fails if it is gone rather than recreating callback side effects. A custom provider may define start-only callback fields, but built-in providers initialize the sandbox in `defineSandbox()` after `open()`.
+Open options belong to `start()` and are not serialized or passed to `resume()`. A provider must put any immutable option-derived data needed for reconnection in its session state. With the current immutable-state contract, `resume()` reconnects existing native state and fails if it is gone rather than recreating callback side effects. When a built-in provider reports that the native sandbox is gone, eve clears the session's provider state and reruns the selector. A custom provider may define start-only callback fields, but built-in providers initialize the sandbox in `defineSandbox()` after `open()`.
 
 Preparation discovers authored files through `ctx.files`; core keeps project layout and artifact storage keys private. Keep provider SDK values behind the provider. `environment.open()` preserves the provider's sandbox capability type, while the heterogeneous runtime registry erases it to eve's common session surface.
 
@@ -247,7 +247,7 @@ Preparation discovers authored files through `ctx.files`; core keeps project lay
 
 ## Lifecycle
 
-Session-owned sandboxes persist across turns and deployments while their provider state remains available. `sandbox.stop()` stops compute without deleting persisted state; a later access resumes that state directly. `sandbox.delete()` clears provider state, so the next `ctx.getSandbox()` reruns the selector and starts a fresh sandbox from the current environment. When the durable session reaches a terminal outcome, eve calls the provider's `onSessionEnd()` hook to release any remaining session-owned resources.
+Session-owned sandboxes persist across turns and deployments while their provider state remains available. `sandbox.stop()` stops compute without deleting persisted state; a later access resumes that state directly. `sandbox.delete()` clears provider state, so the next `ctx.getSandbox()` reruns the selector and starts a fresh sandbox from the current environment. If the native sandbox is gone when a session resumes, for example after a local daemon restart or a removed container, eve does the same: the session continues in a fresh sandbox, without the lost sandbox's files. When the durable session reaches a terminal outcome, eve calls the provider's `onSessionEnd()` hook to release any remaining session-owned resources.
 
 Changing sandbox source, preparation code, Dockerfile content, environment options, workspace resources, or skills produces a new environment generation. Existing durable sessions retain their recorded sandbox state; new sessions use the current generation.
 

@@ -38,6 +38,7 @@ import {
   type SandboxProviderSessionContext,
 } from "#shared/sandbox-provider.js";
 import { SandboxTemplateNotProvisionedError } from "#shared/sandbox-template-error.js";
+import { SandboxSessionGoneError } from "#shared/sandbox-session-gone-error.js";
 
 const JUST_BASH_CACHE_DIRECTORY_NAME = "just-bash";
 export const JUST_BASH_PROVIDER_NAME = "just-bash";
@@ -131,7 +132,9 @@ export function createJustBashSandboxProvider(
         throw new Error("just-bash session state is incompatible with this environment.");
       }
       if (!(await pathExists(state.rootPath))) {
-        throw new Error(`just-bash session root "${state.rootPath}" no longer exists.`);
+        throw new SandboxSessionGoneError(
+          `just-bash session root "${state.rootPath}" no longer exists.`,
+        );
       }
       return await openHandle(context, state.rootPath, options);
     },

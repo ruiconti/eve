@@ -64,6 +64,7 @@ import {
   type SandboxProviderPrepareContext,
 } from "#shared/sandbox-provider.js";
 import { SandboxTemplateNotProvisionedError } from "#shared/sandbox-template-error.js";
+import { SandboxSessionGoneError } from "#shared/sandbox-session-gone-error.js";
 import type { InternalSandboxSession } from "#shared/sandbox-session.js";
 
 type LiveMicrosandboxOptions = ResolvedMicrosandboxOptions & MicrosandboxSandboxRuntimeOptions;
@@ -294,7 +295,7 @@ export async function createMicrosandboxHandle(input: {
   }
 
   if (input.sessionIdentity !== undefined && input.createIfMissing === false) {
-    throw new Error(
+    throw new SandboxSessionGoneError(
       `microsandbox session "${input.sessionIdentity}" is no longer available to resume.`,
     );
   }

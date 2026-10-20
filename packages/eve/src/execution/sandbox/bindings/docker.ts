@@ -51,6 +51,7 @@ import {
   type SandboxProviderSessionContext,
 } from "#shared/sandbox-provider.js";
 import { SandboxTemplateNotProvisionedError } from "#shared/sandbox-template-error.js";
+import { SandboxSessionGoneError } from "#shared/sandbox-session-gone-error.js";
 import type {
   DockerSandboxEnvironmentOptions,
   DockerSandboxRuntimeOptions,
@@ -140,7 +141,9 @@ export function createDockerSandboxProvider(
     let running = await inspectContainerRunning(containerName);
     if (running === undefined) {
       if (!createIfMissing) {
-        throw new Error(`Docker sandbox session container "${containerName}" no longer exists.`);
+        throw new SandboxSessionGoneError(
+          `Docker sandbox session container "${containerName}" no longer exists.`,
+        );
       }
       try {
         await startDockerContainer({
