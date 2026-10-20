@@ -55,7 +55,7 @@ import {
 } from "#execution/sandbox/bindings/vercel-errors.js";
 import { withToolSessionRetention } from "#execution/sandbox/bindings/vercel-tool-sessions.js";
 import { isToolSessionId } from "#execution/tool-session/id.js";
-import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
+import { withSessionSandboxReopen } from "#execution/sandbox/session-reopen.js";
 import {
   getNamedVercelSandbox,
   isVercelSnapshotCreated,
@@ -266,9 +266,9 @@ export function createVercelSandbox(
       };
     },
   };
-  // `start` finds a session's sandbox by name, so keyed tool sessions can reuse it.
+  // `start` finds a session's sandbox by name, so keyed tool sessions and workflow steps can reuse it.
   // A handle is only an SDK client, so a call that ends has nothing to free.
-  return withToolSessionSandboxes(implementation);
+  return withSessionSandboxReopen(implementation);
 }
 
 function vercelSessionName(

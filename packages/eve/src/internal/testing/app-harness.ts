@@ -24,7 +24,7 @@ import {
   defineSandboxProvider,
   type SandboxProviderSessionContext,
 } from "#shared/sandbox-provider.js";
-import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
+import { withSessionSandboxReopen } from "#execution/sandbox/session-reopen.js";
 import {
   buildActiveSessionContext,
   type ActiveSessionInit,
@@ -176,7 +176,7 @@ function createTestSandboxProvider() {
     name: TEST_SANDBOX_PROVIDER_NAME,
     // `start` reopens a session's sandbox by session id, as Vercel Sandbox and just-bash do.
     environment: () =>
-      withToolSessionSandboxes({
+      withSessionSandboxReopen({
         async prepare() {
           return null;
         },

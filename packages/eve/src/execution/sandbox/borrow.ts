@@ -1,8 +1,8 @@
 import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import {
-  releaseToolSessionHandle,
-  unsupportedToolSessionProvider,
-} from "#execution/tool-session/sandbox.js";
+  providerWithoutSessionReopen,
+  releaseSessionSandboxHandle,
+} from "#execution/sandbox/session-reopen.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
 import type { SandboxAccess, SandboxState } from "#sandbox/state.js";
@@ -45,14 +45,14 @@ export async function borrowSessionSandbox(input: {
     access: {
       ...inner,
       async get() {
-        const providerName = unsupportedToolSessionProvider(registry);
+        const providerName = providerWithoutSessionReopen(registry);
         if (providerName !== undefined) throw input.unsupported(providerName);
         return await inner.get();
       },
     },
     async release() {
       const handle = await inner.detach();
-      if (handle !== undefined) await releaseToolSessionHandle(registry, handle);
+      if (handle !== undefined) await releaseSessionSandboxHandle(registry, handle);
     },
   };
 }

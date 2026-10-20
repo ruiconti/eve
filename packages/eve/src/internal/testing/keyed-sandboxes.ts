@@ -1,6 +1,6 @@
 import { type Mock, vi } from "vitest";
 
-import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
+import { withSessionSandboxReopen } from "#execution/sandbox/session-reopen.js";
 import { mockSandbox } from "#internal/testing/mocks/mock-sandbox.js";
 import { defineSandbox } from "#public/definitions/sandbox.js";
 import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
@@ -55,7 +55,7 @@ export function keyedSandboxes(
       };
       return options.reopensBySessionId === false
         ? implementation
-        : withToolSessionSandboxes(implementation, {
+        : withSessionSandboxReopen(implementation, {
             releaseHandle: async (handle) => void released.push(handle),
           });
     },
