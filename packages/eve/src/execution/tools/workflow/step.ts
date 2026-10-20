@@ -92,6 +92,7 @@ async function executeAuthorizedStep(
       );
       // Relayed before the run's outcome, so the session records the sandbox before the call settles.
       if (result.sandboxState !== undefined) {
+        run.sandboxState = result.sandboxState;
         await run.owner.send({
           from: run.from,
           kind: "sandbox-started",
@@ -139,7 +140,7 @@ async function invokeAuthorizedStep(input: {
     sandbox: {
       bundle: run.agentContext.bundle,
       sessionId: run.agentContext.sandbox.sessionId,
-      state: run.agentContext.sandbox.state,
+      state: run.sandboxState ?? run.agentContext.sandbox.state,
     },
   };
   const invocation: WorkflowStepInvocation = {

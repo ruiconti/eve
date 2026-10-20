@@ -5,6 +5,7 @@ import type {
   WorkflowToolRunRef,
 } from "#execution/tools/workflow/messages.js";
 import type { WorkflowToolRunInbox } from "#execution/tools/workflow/owner.js";
+import type { SandboxState } from "#sandbox/state.js";
 import type {
   ToolContext,
   ToolInputRequest,
@@ -39,6 +40,11 @@ export interface WorkflowToolRunContext {
    */
   readonly from: WorkflowToolRunRef;
   readonly owner: WorkflowToolRunInbox;
+  /**
+   * The state of the session's sandbox once a step of this run started it,
+   * which later steps resume instead of starting it again.
+   */
+  sandboxState?: SandboxState;
 }
 
 type WorkflowToolRunContextCarrier = {

@@ -22,6 +22,7 @@ import {
   failingDeployWorkflow,
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
+  sandboxPrepareThenReadWorkflow,
   sandboxPrepareWorkflow,
   stepReferenceWorkflow,
   workflowContextMisuseWorkflow,
@@ -141,11 +142,12 @@ describe("workflow tools", () => {
     expect(consoleOutput.unexpected(workflowSdkNotice.fatalStep)).toEqual([]);
   });
 
-  it("records a sandbox a step started, which the session resumes and deletes when it ends", async () => {
+  it("records a sandbox a step started, which later steps and the session resume and the session deletes", async () => {
     const readBySession: (string | null)[] = [];
+    let reply = "";
     const runtime = await createWorkflowToolRuntime({
       agentName: "workflow-step-sandbox-first",
-      execute: sandboxPrepareWorkflow,
+      execute: sandboxPrepareThenReadWorkflow,
       modules: [
         {
           logicalPath: "hooks/sandbox.ts",
@@ -180,7 +182,8 @@ describe("workflow tools", () => {
       ]);
       const stream = captureTurnEvents(run);
       try {
-        await stream.nextTurn();
+        const turn = await stream.nextTurn();
+        reply = String(filterEventsByType(turn, "message.completed").at(-1)?.data.message);
         await resumeSessionInbox(sessionCommandHookToken(run.runId), { kind: "reset" });
         const terminal = await stream.nextTurn();
         expect(filterEventsByType(terminal, "session.completed")).toHaveLength(1);
@@ -190,9 +193,11 @@ describe("workflow tools", () => {
       }
     });
 
+    expect(reply).toContain('"prepared":"prepared:api"');
     expect(readBySession).toEqual(["prepared:api"]);
     const events = runtime.sandboxEvents.map((event) => event.split(":")[0]);
-    // The step ran the definition once; the session resumed that sandbox, then deleted it.
+    // The first step ran the definition once; the second step and the session resumed
+    // that sandbox, and the session deleted it when it ended.
     expect(events.filter((event) => event === "definition")).toHaveLength(1);
     expect(events.at(-1)).toBe("delete");
   });

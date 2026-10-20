@@ -486,9 +486,9 @@ async function prepareInput(ctx: WorkflowStepToolContext, input: { value: string
   called the tool, the step resumes that sandbox without running your sandbox definition again.
 - Otherwise the step creates the sandbox through your definition, under the session's sandbox
   name. When the step returns, eve records the sandbox on the session before the call's result
-  arrives. The session's turns then resume that sandbox without running the definition again,
-  and eve deletes it when the session ends, as it does a sandbox the session opened itself. If
-  the session records its own sandbox first, the session's record stays.
+  arrives. Later steps of the same call and the session's turns then resume that sandbox without
+  running the definition again, and eve deletes it when the session ends, as it does a sandbox
+  the session opened itself. If the session records its own sandbox first, that record stays.
 - The session does not record a sandbox the step created when every attempt of that step fails,
   when the session ends while the step runs, or when the session shares its parent's sandbox. In
   those cases eve deletes the sandbox only if the session, or the parent that owns it, opens it

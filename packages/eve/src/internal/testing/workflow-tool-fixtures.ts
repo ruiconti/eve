@@ -53,6 +53,18 @@ async function prepareSandboxStep(service: string, ctx: WorkflowStepToolContext)
   return { seed };
 }
 
+export async function sandboxPrepareThenReadWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+  "use workflow";
+  await prepareSandboxStep(input.service, ctx);
+  return await readPreparedStep(ctx);
+}
+
+async function readPreparedStep(ctx: WorkflowStepToolContext) {
+  "use step";
+  const sandbox = await ctx.getSandbox();
+  return { prepared: await sandbox.readTextFile({ path: "/workspace/prepared.txt" }) };
+}
+
 export async function workflowContextMisuseWorkflow(_input: DeployInput, ctx: WorkflowToolContext) {
   "use workflow";
   return await readAgentsStep(ctx);
