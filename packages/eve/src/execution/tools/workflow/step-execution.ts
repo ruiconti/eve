@@ -6,7 +6,11 @@ import { borrowSessionSandbox, type BorrowedSandbox } from "#execution/sandbox/b
 import { createLogger, logError } from "#internal/logging.js";
 import { resolveDurableCompiledArtifactsSource } from "#runtime/durable-compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
-import type { SandboxEnvironment } from "#shared/sandbox-environment.js";
+import {
+  hasSameSandboxEnvironmentConfiguration,
+  type SandboxEnvironmentIdentity,
+} from "#shared/sandbox-environment.js";
+import type { SandboxAccess } from "#sandbox/state.js";
 import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import {
   isAuthorizationSignal,
@@ -57,11 +61,22 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
         ...base,
         agent: () => unavailableInStep("ctx.agent()", "Call ctx.agent() in the workflow body."),
         ask: () => unavailableInStep("ctx.ask()", "Call ctx.ask() in the workflow body."),
-        getSandbox: (async (environment?: SandboxEnvironment) => {
-          context.setVirtualContext(SandboxKey, (await sandbox.open()).access);
-          return environment === undefined
-            ? await base.getSandbox()
-            : await base.getSandbox(environment);
+        getSandbox: (async (environment?: SandboxEnvironmentIdentity) => {
+          const access = await sandbox.open();
+          // The step imports its own copy of the module that declares the
+          // environment, so the same provider and configuration match.
+          if (
+            environment !== undefined &&
+            (access.environment === undefined ||
+              !hasSameSandboxEnvironmentConfiguration(access.environment, environment))
+          ) {
+            throw fatal(
+              'ctx.getSandbox() in a "use step" function received a sandbox environment the session\'s sandbox does not use. ' +
+                "Pass the environment the agent's sandbox definition opens, or call ctx.getSandbox() without one.",
+            );
+          }
+          context.setVirtualContext(SandboxKey, access);
+          return await base.getSandbox();
         }) as SessionContext["getSandbox"],
         getToken: auth.getToken,
         requireAuth: auth.requireAuth,
@@ -107,8 +122,9 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
 
 /**
  * The calling session's sandbox, opened on the step's first `ctx.getSandbox()`
- * and let go of when the step ends. The step never owns it, so the session
- * keeps it, and a step that never asks for it loads nothing.
+ * and let go of when the step ends. The step never owns it: the session keeps
+ * it, and the session's turns may be using it, so the step can neither stop
+ * nor delete it. A step that never asks for it loads nothing.
  */
 function borrowStepSandbox(input: WorkflowStepContext) {
   const { bundle, sessionId, state } = input.sandbox;
@@ -131,23 +147,36 @@ function borrowStepSandbox(input: WorkflowStepContext) {
       sessionId,
       state,
       unsupported: (providerName) =>
-        Object.assign(
-          new Error(
-            `ctx.getSandbox() is unavailable inside a "use step" function of tool "${input.toolName}": ` +
-              `sandbox provider "${providerName}" cannot reopen the session's sandbox outside its turns. ` +
-              "Use Vercel Sandbox or just-bash for the agent's sandbox, or move the sandbox work into a tool defined with defineTool().",
-          ),
-          { fatal: true },
+        fatal(
+          `ctx.getSandbox() is unavailable inside a "use step" function of tool "${input.toolName}": ` +
+            `sandbox provider "${providerName}" cannot reopen the session's sandbox outside its turns. ` +
+            "Use Vercel Sandbox or just-bash for the agent's sandbox, or move the sandbox work into a tool defined with defineTool().",
         ),
     });
   };
+  const borrowOnce = (): Promise<BorrowedSandbox> => {
+    borrowing ??= borrow().catch((error: unknown) => {
+      borrowing = undefined;
+      throw error;
+    });
+    return borrowing;
+  };
   return {
-    open(): Promise<BorrowedSandbox> {
-      borrowing ??= borrow().catch((error: unknown) => {
-        borrowing = undefined;
-        throw error;
-      });
-      return borrowing;
+    async open(): Promise<SandboxAccess> {
+      const { access } = await borrowOnce();
+      return {
+        ...access,
+        delete: () =>
+          unavailableInStep(
+            "sandbox.delete()",
+            "The step borrows the session's sandbox, and only the session can delete it.",
+          ),
+        stop: () =>
+          unavailableInStep(
+            "sandbox.stop()",
+            "The session's turns may be using the sandbox; eve lets go of the step's handle when the step ends.",
+          ),
+      };
     },
     async release(): Promise<void> {
       const borrowed = await borrowing?.catch(() => undefined);
@@ -162,8 +191,10 @@ function borrowStepSandbox(input: WorkflowStepContext) {
 }
 
 function unavailableInStep(capability: string, guidance: string): never {
-  throw Object.assign(
-    new Error(`${capability} is unavailable inside a "use step" function. ${guidance}`),
-    { fatal: true },
-  );
+  throw fatal(`${capability} is unavailable inside a "use step" function. ${guidance}`);
+}
+
+/** A misuse a retry would repeat, which the Workflow SDK fails without retrying. */
+function fatal(message: string): Error {
+  return Object.assign(new Error(message), { fatal: true });
 }

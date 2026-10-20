@@ -20,6 +20,7 @@ import {
   createDiskRuntimeCompiledArtifactsSource,
 } from "#runtime/compiled-artifacts-source.js";
 import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
+import { defineSandboxProvider } from "#shared/sandbox-provider.js";
 
 const durable = vi.hoisted(() => ({
   attempt: 1,
@@ -132,13 +133,25 @@ describe("workflow step authorization", () => {
     },
   );
 
-  it("opens the sandbox the calling session uses and lets go of it after each attempt", async () => {
-    const { deleted, handles, registry, released, starts } = keyedSandboxes();
+  it("opens the sandbox a child shares with its owner and lets go of it after each attempt", async () => {
+    // The owner opened its sandbox with options, which name a Vercel sandbox.
+    const openOptions = { tier: "large" };
+    const ownerKey = `owner-session:${JSON.stringify(openOptions)}`;
+    const { deleted, handles, registry, released, starts } = keyedSandboxes({
+      inherited: true,
+      openOptions,
+    });
     bundle.registry = registry;
-    // A session that inherits its owner's sandbox calls with the owner's sandbox session.
+    // A child that has not opened the shared sandbox calls with its owner's session and state.
     const input: WorkflowStepContext = {
-      ...context("user-1", "owner-session"),
-      sandbox: { bundle: { source: { kind: "development" } }, sessionId: "owner-session" },
+      ...context("user-1", "child-session"),
+      sandbox: {
+        bundle: { source: { kind: "development" } },
+        sessionId: "owner-session",
+        state: {
+          session: { providerName: "keyed", state: { key: ownerKey }, stateProtocolVersion: 1 },
+        },
+      },
     };
     // `eve dev` deliveries carry the generation a development source resolves to.
     const generation = {
@@ -162,7 +175,7 @@ describe("workflow step authorization", () => {
       ),
     ).resolves.toMatchObject({ kind: "result", output: "draft" });
     expect(bundle.loadedFrom).toEqual([generation.source, generation.source]);
-    expect(starts).toEqual(["owner-session"]);
+    expect(starts).toEqual([ownerKey]);
     expect(handles).toHaveLength(2);
     expect(released).toEqual(handles);
     expect(deleted).not.toHaveBeenCalled();
@@ -180,9 +193,40 @@ describe("workflow step authorization", () => {
     // A session that has not opened its sandbox yet gets it through the definition.
     await runStep(open);
     expect(definitionRuns).toBe(1);
-    const recorded = { session: { providerName: "keyed", state: {}, stateProtocolVersion: 1 } };
+    const recorded = {
+      session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
+    };
     await runStep(open, { ...context(), sandbox: { ...context().sandbox, state: recorded } });
     expect(definitionRuns).toBe(1);
+  });
+
+  it("accepts its own copy of the session's environment and leaves stopping and deleting to the session", async () => {
+    const { deleted, provider, registry, stopped } = keyedSandboxes();
+    bundle.registry = registry;
+    // The step imports its own copy of the module that declares the environment.
+    await expect(
+      runStep(async (ctx) => {
+        await ctx.getSandbox(provider.environment());
+        return "opened";
+      }),
+    ).resolves.toMatchObject({ output: "opened" });
+    const other = defineSandboxProvider({
+      name: "other",
+      environment: () => ({ prepare: async () => null, resume: vi.fn(), start: vi.fn() }),
+    }).environment();
+    const misuse: [string, (ctx: ToolContext) => Promise<unknown>][] = [
+      ["received a sandbox environment", (ctx) => ctx.getSandbox(other)],
+      ["sandbox.stop() is unavailable", async (ctx) => await (await ctx.getSandbox()).stop()],
+      ["sandbox.delete() is unavailable", async (ctx) => await (await ctx.getSandbox()).delete()],
+    ];
+    for (const [message, access] of misuse) {
+      await expect(runStep(access)).rejects.toMatchObject({
+        fatal: true,
+        message: expect.stringContaining(message),
+      });
+    }
+    expect(stopped).not.toHaveBeenCalled();
+    expect(deleted).not.toHaveBeenCalled();
   });
 
   it("fails ctx.getSandbox() without retrying on a provider that cannot reopen the session's sandbox", async () => {

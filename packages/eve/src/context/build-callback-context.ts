@@ -1,8 +1,5 @@
 import type { SessionContext } from "#context/session-context.js";
-import {
-  isSameSandboxEnvironment,
-  type SandboxEnvironmentIdentity,
-} from "#shared/sandbox-environment.js";
+import type { SandboxEnvironmentIdentity } from "#shared/sandbox-environment.js";
 import type { RuntimeSandboxSession, SandboxSession } from "#shared/sandbox-session.js";
 import { readSessionSchedule } from "#context/session-schedule.js";
 import { loadContext } from "#context/container.js";
@@ -36,11 +33,7 @@ export function buildCallbackContext(): SessionContext {
             "Call ctx.getSandbox() only from authored runtime functions such as tools, hooks, and channel events.",
         );
       }
-      if (
-        environment !== undefined &&
-        (access.environment === undefined ||
-          !isSameSandboxEnvironment(access.environment, environment))
-      ) {
+      if (environment !== undefined && access.environment !== environment) {
         throw new Error("The requested sandbox environment is not active for the current session.");
       }
       return access.get().then((sandbox) => {
