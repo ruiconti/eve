@@ -79,6 +79,7 @@ type CallerDispatch = Pick<
   | "inheritedConversation"
   | "localDevRequest"
   | "sandboxSessionId"
+  | "sandboxState"
   | "serializedContext"
   | "session"
   | "traceRoot"
@@ -130,7 +131,7 @@ export function captureAgentSessionContext(
       sessionId: session.sessionId,
       turn: { id: batch.event.turnId, sequence: batch.event.sequence },
     },
-    sandbox: { sessionId: caller.sandboxSessionId, state: session.sandboxState },
+    sandbox: { sessionId: caller.sandboxSessionId, state: caller.sandboxState },
     traceRoot: caller.traceRoot,
     trace: resolveToolCallAgentTrace({
       callId,
