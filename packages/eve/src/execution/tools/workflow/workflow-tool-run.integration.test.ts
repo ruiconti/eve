@@ -22,6 +22,7 @@ import {
   failingDeployWorkflow,
   reportingDeployWorkflow,
   returnAskAnswerWorkflow,
+  sandboxPrepareWorkflow,
   stepReferenceWorkflow,
   workflowContextMisuseWorkflow,
 } from "#internal/testing/workflow-tool-fixtures.js";
@@ -138,6 +139,56 @@ describe("workflow tools", () => {
       expect.stringContaining(workflowSdkNotice.fatalStep),
     );
     expect(consoleOutput.unexpected(workflowSdkNotice.fatalStep)).toEqual([]);
+  });
+
+  it("shares the calling session's sandbox with a step helper in both directions", async () => {
+    const readBySession: (string | null)[] = [];
+    const runtime = await createWorkflowToolRuntime({
+      agentName: "workflow-step-sandbox",
+      execute: sandboxPrepareWorkflow,
+      modules: [
+        {
+          logicalPath: "hooks/sandbox.ts",
+          loadNamespace: async () => ({
+            default: defineHook({
+              events: {
+                async "message.received"(_event, ctx) {
+                  const sandbox = await ctx.getSandbox();
+                  await sandbox.writeTextFile({
+                    content: "from-session",
+                    path: "/workspace/seed.txt",
+                  });
+                },
+                async "action.result"(_event, ctx) {
+                  const sandbox = await ctx.getSandbox();
+                  readBySession.push(
+                    await sandbox.readTextFile({ path: "/workspace/prepared.txt" }),
+                  );
+                },
+              },
+            }),
+          }),
+        },
+      ],
+      toolName: "deploy_service",
+    });
+
+    const output = await runtime.run(async () => {
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: 'Run deploy_service with service "api"' },
+          serializedContext: buildWorkflowToolSerializedContext({
+            continuationToken: "schedule:workflow-step-sandbox",
+          }),
+        },
+      ]);
+      return String(await readFirstTurnReply(run));
+    });
+
+    expect(output).toContain('"seed":"from-session"');
+    expect(readBySession).toEqual(["prepared:api"]);
   });
 
   it("settles the call with an error when the workflow body throws", async () => {

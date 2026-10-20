@@ -14,13 +14,10 @@ import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import { buildCallbackContext } from "#context/build-callback-context.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { AuthKey, InitiatorAuthKey, SandboxKey, SessionIdKey, SessionKey } from "#context/keys.js";
+import { borrowSessionSandbox } from "#execution/sandbox/borrow.js";
 import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import { deriveToolSessionId, validateToolSessionKey } from "#execution/tool-session/id.js";
-import {
-  assertToolSessionSandboxSupport,
-  releaseToolSessionHandle,
-  ToolSessionSandboxUnsupportedError,
-} from "#execution/tool-session/sandbox.js";
+import { ToolSessionSandboxUnsupportedError } from "#execution/tool-session/sandbox.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import {
   AuthorizationHookKey,
@@ -210,36 +207,15 @@ interface CallSandbox {
   release(): Promise<void>;
 }
 
-/**
- * A keyed session's sandbox: found or created on the first `ctx.getSandbox()`
- * through the provider's `start`, which reopens it by session id, and kept
- * after the call. Concurrent first calls in this process share one start.
- * The call does not own the sandbox, so a failed start never deletes it, and
- * release only lets go of this call's handle: an overlapping call keeps its
- * own.
- */
+/** A keyed session's sandbox, kept after the call; the call never owns it. */
 async function keyedSandbox(runtime: InvokeToolRuntime, sessionId: string): Promise<CallSandbox> {
-  const inner = await ensureSandboxAccess({
+  return await borrowSessionSandbox({
     compiledArtifactsSource: runtime.compiledArtifactsSource,
     nodeId: runtime.nodeId,
-    ownsSandbox: false,
     registry: runtime.sandboxRegistry,
     sessionId,
-    state: null,
+    unsupported: (providerName) => new ToolSessionSandboxUnsupportedError(providerName),
   });
-  return {
-    access: {
-      ...inner,
-      async get() {
-        assertToolSessionSandboxSupport(runtime.sandboxRegistry);
-        return await inner.get();
-      },
-    },
-    async release() {
-      const handle = await inner.detach();
-      if (handle !== undefined) await releaseToolSessionHandle(runtime.sandboxRegistry, handle);
-    },
-  };
 }
 
 /** The call's sandbox: opened on the first `ctx.getSandbox()`, deleted after the call. */

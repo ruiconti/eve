@@ -12,7 +12,7 @@ import {
   sleep as workflowSleep,
 } from "#compiled/@workflow/core/index.js";
 
-import type { WorkflowToolContext } from "#tools/workflow-definition.js";
+import type { WorkflowStepToolContext, WorkflowToolContext } from "#tools/workflow-definition.js";
 import {
   ConnectionAuthorizationFailedError,
   ConnectionAuthorizationRequiredError,
@@ -38,6 +38,19 @@ export async function authorizedDeployWorkflow(input: DeployInput, ctx: Workflow
   const plan = await planDeployStep(input.service);
   const authenticatedAs = await authorizedDeployStep(input.service, ctx);
   return { plan, authenticatedAs };
+}
+
+export async function sandboxPrepareWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
+  "use workflow";
+  return await prepareSandboxStep(input.service, ctx);
+}
+
+async function prepareSandboxStep(service: string, ctx: WorkflowStepToolContext) {
+  "use step";
+  const sandbox = await ctx.getSandbox();
+  const seed = await sandbox.readTextFile({ path: "/workspace/seed.txt" });
+  await sandbox.writeTextFile({ content: `prepared:${service}`, path: "/workspace/prepared.txt" });
+  return { seed };
 }
 
 export async function workflowContextMisuseWorkflow(_input: DeployInput, ctx: WorkflowToolContext) {

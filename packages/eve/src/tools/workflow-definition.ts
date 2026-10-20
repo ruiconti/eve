@@ -25,10 +25,19 @@ export interface WorkflowAgentMetadata {
   readonly description: string;
 }
 
-/** Context capabilities available inside an authored `"use step"` helper. */
+/**
+ * Context capabilities available inside an authored `"use step"` helper.
+ *
+ * `getSandbox()` opens the sandbox of the session that made the call, the
+ * same sandbox its turns use. The step does not own it: eve releases the
+ * step's handle when the step ends and never stops or deletes the sandbox for
+ * it, and `delete()` throws. Steps can retry, so make sandbox writes safe to
+ * repeat. Only providers that reopen a session's sandbox by session id, Vercel
+ * Sandbox and just-bash, support it; others throw.
+ */
 export type WorkflowStepToolContext = Pick<
   ToolContext,
-  "abortSignal" | "callId" | "session" | "toolName" | "getToken" | "requireAuth"
+  "abortSignal" | "callId" | "session" | "toolName" | "getSandbox" | "getToken" | "requireAuth"
 >;
 
 /** Options for one message to a `ctx.agent` session. */
@@ -79,7 +88,7 @@ export interface AgentSession {
 /** Members the context of every workflow tool entry point shares. */
 export type WorkflowSharedContext = Pick<
   ToolContext,
-  "session" | "toolName" | "getToken" | "requireAuth"
+  "session" | "toolName" | "getSandbox" | "getToken" | "requireAuth"
 > & {
   /**
    * Returns a new session with the agent of this invocation name. Nothing

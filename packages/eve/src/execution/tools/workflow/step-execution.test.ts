@@ -13,6 +13,13 @@ import type {
 import type { ToolContext } from "#tools/definition.js";
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
 import type { AuthorizationDefinition } from "#shared/connection-types.js";
+import { keyedSandboxes } from "#internal/testing/keyed-sandboxes.js";
+import { withDevelopmentWorkflowGeneration } from "#internal/workflow/development-generation-context.js";
+import {
+  createBundledRuntimeCompiledArtifactsSource,
+  createDiskRuntimeCompiledArtifactsSource,
+} from "#runtime/compiled-artifacts-source.js";
+import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
 
 const durable = vi.hoisted(() => ({
   attempt: 1,
@@ -30,6 +37,22 @@ vi.mock("#compiled/@workflow/core/index.js", () => ({
     }),
   }),
 }));
+const bundle = vi.hoisted(() => ({
+  loadedFrom: [] as unknown[],
+  registry: undefined as RuntimeSandboxRegistry | undefined,
+}));
+vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
+  getCompiledRuntimeAgentBundle: async (input: { compiledArtifactsSource: unknown }) => {
+    bundle.loadedFrom.push(input.compiledArtifactsSource);
+    return {
+      compiledArtifactsSource: input.compiledArtifactsSource,
+      graph: { root: { nodeId: "__root__", sandboxRegistry: bundle.registry } },
+    };
+  },
+}));
+vi.mock("#runtime/sandbox/prepared-artifacts.js", () => ({
+  loadSandboxPreparedArtifact: async () => null,
+}));
 vi.mock("#internal/workflow/runtime.js", () => ({
   getRun: () => ({
     getReadable: ({ namespace }: { namespace: string }) => ({
@@ -39,7 +62,7 @@ vi.mock("#internal/workflow/runtime.js", () => ({
   }),
 }));
 
-function context(user = "user-1"): WorkflowStepContext {
+function context(user = "user-1", sessionId = "session-1"): WorkflowStepContext {
   const auth = {
     attributes: {},
     authenticator: "test",
@@ -59,6 +82,7 @@ function context(user = "user-1"): WorkflowStepContext {
     },
     callId: "call-1",
     toolName: "devbox",
+    sandbox: { bundle: { source: createBundledRuntimeCompiledArtifactsSource() }, sessionId },
   };
 }
 
@@ -78,6 +102,7 @@ describe("workflow step authorization", () => {
     durable.attempt = 1;
     durable.stepId = "step-1";
     durable.entries.clear();
+    bundle.loadedFrom = [];
   });
   afterEach(() => vi.unstubAllEnvs());
   it.each([
@@ -106,6 +131,53 @@ describe("workflow step authorization", () => {
       });
     },
   );
+
+  it("opens the sandbox the calling session uses and lets go of it after each attempt", async () => {
+    const { deleted, handles, registry, released, starts } = keyedSandboxes();
+    bundle.registry = registry;
+    // A session that inherits its owner's sandbox calls with the owner's sandbox session.
+    const input: WorkflowStepContext = {
+      ...context("user-1", "owner-session"),
+      sandbox: { bundle: { source: { kind: "development" } }, sessionId: "owner-session" },
+    };
+    // `eve dev` deliveries carry the generation a development source resolves to.
+    const generation = {
+      generationId: "generation-1",
+      source: createDiskRuntimeCompiledArtifactsSource("/virtual/app"),
+    };
+    const inDevelopment = <T>(run: () => Promise<T>) =>
+      withDevelopmentWorkflowGeneration(generation, run);
+    const plan = { path: "/workspace/plan.txt" };
+    await expect(
+      inDevelopment(() =>
+        runStep(async (ctx) => {
+          await (await ctx.getSandbox()).writeTextFile({ ...plan, content: "draft" });
+          throw new Error("temporary service failure");
+        }, input),
+      ),
+    ).rejects.toThrow("temporary service failure");
+    await expect(
+      inDevelopment(() =>
+        runStep(async (ctx) => await (await ctx.getSandbox()).readTextFile(plan), input),
+      ),
+    ).resolves.toMatchObject({ kind: "result", output: "draft" });
+    expect(bundle.loadedFrom).toEqual([generation.source, generation.source]);
+    expect(starts).toEqual(["owner-session"]);
+    expect(handles).toHaveLength(2);
+    expect(released).toEqual(handles);
+    expect(deleted).not.toHaveBeenCalled();
+  });
+
+  it("fails ctx.getSandbox() without retrying on a provider that cannot reopen the session's sandbox", async () => {
+    bundle.registry = keyedSandboxes({ reopensBySessionId: false }).registry;
+    await expect(runStep((ctx) => ctx.getSandbox())).rejects.toMatchObject({
+      fatal: true,
+      message:
+        'ctx.getSandbox() is unavailable inside a "use step" function of tool "devbox": ' +
+        'sandbox provider "keyed" cannot reopen the session\'s sandbox outside its turns. ' +
+        "Use Vercel Sandbox or just-bash for the agent's sandbox, or move the sandbox work into a tool defined with defineTool().",
+    });
+  });
 
   it("does not exchange a consumed code again when the rest of the step retries", async () => {
     let exchanged = false;

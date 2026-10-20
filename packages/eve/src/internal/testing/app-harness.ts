@@ -20,7 +20,11 @@ import { resolveRuntimeAgentGraph } from "#runtime/resolve-agent-graph.js";
 import { createNodeHarnessTools } from "#execution/node-step.js";
 import { serializeInputSchema, serializeOutputSchema } from "#tools/schema.js";
 import { defineSandbox } from "#public/definitions/sandbox.js";
-import { defineSandboxProvider } from "#shared/sandbox-provider.js";
+import {
+  defineSandboxProvider,
+  type SandboxProviderSessionContext,
+} from "#shared/sandbox-provider.js";
+import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
 import {
   buildActiveSessionContext,
   type ActiveSessionInit,
@@ -170,17 +174,19 @@ function createTestSandboxProvider() {
 
   const provider = defineSandboxProvider({
     name: TEST_SANDBOX_PROVIDER_NAME,
-    environment: () => ({
-      async prepare() {
-        return null;
-      },
-      async resume(context) {
-        return createHandle(context.session.id);
-      },
-      async start(context) {
-        return { handle: createHandle(context.session.id), state: null };
-      },
-    }),
+    // `start` reopens a session's sandbox by session id, as Vercel Sandbox and just-bash do.
+    environment: () =>
+      withToolSessionSandboxes({
+        async prepare() {
+          return null;
+        },
+        async resume(context: SandboxProviderSessionContext) {
+          return createHandle(context.session.id);
+        },
+        async start(context: SandboxProviderSessionContext) {
+          return { handle: createHandle(context.session.id), state: null };
+        },
+      }),
   });
   return { clear: () => sessionSandboxes.clear(), provider };
 }
