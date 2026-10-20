@@ -477,11 +477,14 @@ async function prepareInput(ctx: WorkflowStepToolContext, input: { value: string
 - Steps run at least once and retry after a failure, so make sandbox writes safe to repeat. Write
   whole files instead of appending to them, or check for earlier output first.
 - The sandbox provider must find the session's sandbox from its session id: Vercel Sandbox or
-  just-bash. If the session has not opened its sandbox yet, the step creates it and the session's
-  turns find it later. On another provider, `ctx.getSandbox()` in a step fails without a retry, with
-  a `sandbox provider "<name>" cannot reopen the session's sandbox outside its turns` error. just-bash
+  just-bash. On another provider, `ctx.getSandbox()` in a step fails without a retry, with a
+  `sandbox provider "<name>" cannot reopen the session's sandbox outside its turns` error. just-bash
   keeps its sandboxes on the local disk, so a step sees the session's files only when it runs on
   the same machine, as in local development.
+- If the session opened its sandbox before it called the tool, the step resumes that sandbox
+  without running your sandbox definition again. Otherwise the step opens the sandbox through your
+  definition. The session's turns later find the same sandbox, and they run the definition again
+  when they first open it, so keep the definition's setup safe to repeat.
 
 ## Ask a human: `ctx.ask`
 

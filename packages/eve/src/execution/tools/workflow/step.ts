@@ -128,7 +128,11 @@ async function invokeAuthorizedStep(input: {
     baseUrl: getWorkflowMetadata().url,
     token: callbackToken,
     authorizationResults,
-    sandbox: { bundle: run.agentContext.bundle, sessionId: run.agentContext.sandbox.sessionId },
+    sandbox: {
+      bundle: run.agentContext.bundle,
+      sessionId: run.agentContext.sandbox.sessionId,
+      state: run.agentContext.sandbox.state,
+    },
   };
   const invocation: WorkflowStepInvocation = {
     args: args.map((arg) => (arg === ctx ? null : arg)),

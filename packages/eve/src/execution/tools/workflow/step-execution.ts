@@ -111,7 +111,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
  * keeps it, and a step that never asks for it loads nothing.
  */
 function borrowStepSandbox(input: WorkflowStepContext) {
-  const { bundle, sessionId } = input.sandbox;
+  const { bundle, sessionId, state } = input.sandbox;
   // The step's own context replaces the delivery's, which carries the
   // development generation a development source resolves to.
   const delivery = contextStorage.getStore();
@@ -129,6 +129,7 @@ function borrowStepSandbox(input: WorkflowStepContext) {
       nodeId: node.nodeId,
       registry: node.sandboxRegistry,
       sessionId,
+      state,
       unsupported: (providerName) =>
         Object.assign(
           new Error(

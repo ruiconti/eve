@@ -168,6 +168,23 @@ describe("workflow step authorization", () => {
     expect(deleted).not.toHaveBeenCalled();
   });
 
+  it("resumes the sandbox the session set up instead of running its definition again", async () => {
+    let definitionRuns = 0;
+    bundle.registry = keyedSandboxes({
+      failSelector: () => {
+        definitionRuns += 1;
+        return false;
+      },
+    }).registry;
+    const open = async (ctx: ToolContext) => void (await ctx.getSandbox());
+    // A session that has not opened its sandbox yet gets it through the definition.
+    await runStep(open);
+    expect(definitionRuns).toBe(1);
+    const recorded = { session: { providerName: "keyed", state: {}, stateProtocolVersion: 1 } };
+    await runStep(open, { ...context(), sandbox: { ...context().sandbox, state: recorded } });
+    expect(definitionRuns).toBe(1);
+  });
+
   it("fails ctx.getSandbox() without retrying on a provider that cannot reopen the session's sandbox", async () => {
     bundle.registry = keyedSandboxes({ reopensBySessionId: false }).registry;
     await expect(runStep((ctx) => ctx.getSandbox())).rejects.toMatchObject({

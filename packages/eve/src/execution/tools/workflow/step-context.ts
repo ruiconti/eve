@@ -1,6 +1,7 @@
 import type { SessionContext } from "#context/session-context.js";
 import type { AgentSessionBundle } from "#execution/agent-sessions/context.js";
 import type { AuthorizationResult, AuthorizationSignal } from "#harness/authorization.js";
+import type { SandboxState } from "#sandbox/state.js";
 
 export type WorkflowStepAuthorizationResult = AuthorizationResult & {
   readonly attemptId: string;
@@ -23,6 +24,12 @@ export interface WorkflowStepSandbox {
   readonly bundle: AgentSessionBundle;
   /** The session whose sandbox the caller uses: its own, or the owner's it inherits. */
   readonly sessionId: string;
+  /**
+   * The session's sandbox state when the call was made. A step resumes it, as
+   * the session's later turns do, instead of rerunning the sandbox definition
+   * on a sandbox the session already set up.
+   */
+  readonly state?: SandboxState;
 }
 
 export type WorkflowStepResult = { readonly authorized: readonly string[] } & (
