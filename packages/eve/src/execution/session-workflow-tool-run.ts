@@ -7,9 +7,12 @@ import {
   type WorkflowToolAskRequest,
   type WorkflowToolRunMessage,
   type WorkflowToolRunOutcomeMessage,
+  type WorkflowToolRunRef,
   type WorkflowToolRunRequestMessage,
   type WorkflowToolRunWithdrawMessage,
+  type WorkflowToolSandboxReply,
 } from "#execution/tools/workflow/messages.js";
+import { findTask, isTaskWorking, readTaskTable } from "#execution/tasks/table.js";
 import {
   withdrawFinishedRunQuestionsStep,
   withdrawWorkflowToolRunQuestionStep,
@@ -28,6 +31,7 @@ import {
 import { runProxySubagentEventStep } from "#subagents/event-proxy-step.js";
 import type { WorkflowAskRoute } from "#harness/hitl/relays.js";
 import type { RuntimeActionResult } from "#shared/action-types.js";
+import type { SessionStateMap } from "#harness/types.js";
 
 interface HandlerInput<T> {
   readonly cursor: SessionStateCursor;
@@ -106,8 +110,19 @@ async function handleWorkflowToolRunRequest(
 ): Promise<void> {
   const { cursor, message } = input;
   if (message.request.kind === "sandbox-request") {
-    // Replies once the session recorded the sandbox, so no step uses one the session could lose.
-    const { reply } = await cursor.advance((state) => openSessionSandboxStep(state));
+    // Only a run still serving a call gets a sandbox, so a late request never opens one for nobody.
+    // The reply follows the recording, so no step uses a sandbox the session could lose.
+    const reply: WorkflowToolSandboxReply = isServingRun(
+      cursor.sessionState.snapshot.session.state,
+      message.from,
+    )
+      ? (await cursor.advance((state) => openSessionSandboxStep(state))).reply
+      : {
+          kind: "failed",
+          message:
+            'ctx.getSandbox() in a "use step" function could not open the session\'s sandbox: ' +
+            "the call that asked for it is no longer running.",
+        };
     await resumeHookStep(message.replyTo, reply, { ifPresent: true });
     return;
   }
@@ -153,4 +168,15 @@ async function handleWorkflowToolRunWithdraw(
 
 function createWorkflowAskRoute(ask: WorkflowToolAskRequest): WorkflowAskRoute {
   return { control: ask.control };
+}
+
+/** Whether `from` is the run of a call a turn waits on, or of a task still working. */
+function isServingRun(state: SessionStateMap | undefined, from: WorkflowToolRunRef): boolean {
+  if (from.taskId === undefined) {
+    return (
+      findBlockingWorkflowToolRun(state, from.callId, from.turnId)?.address.runId === from.runId
+    );
+  }
+  const task = findTask(readTaskTable(state), from.taskId);
+  return task !== undefined && isTaskWorking(task) && task.run?.runId === from.runId;
 }

@@ -130,4 +130,61 @@ describe("handleWorkflowToolRunMessage", () => {
     ).toBe(true);
     expect(readHitlState(cursor.sessionState.snapshot.session.state).relays.size).toBe(0);
   });
+
+  it("opens its sandbox only for a run still serving a call", async () => {
+    // Alice's reviewer task runs again after its first run ended; a step of the first run asks late.
+    const created = createTask(readTaskTable(undefined), {
+      callId: "reviewer-call",
+      kind: "agent",
+      name: "reviewer",
+      resumable: true,
+      turnId: "turn_1",
+    });
+    const table = recordTaskRun(created.table, created.taskId, {
+      hookToken: "reviewer-run-control",
+      runId: "reviewer-run-2",
+    });
+    const base = createTestSessionState(
+      { sessionId: "support-session" },
+      { sequence: 2, stepIndex: 0, turnId: "turn_1" },
+    );
+    const cursor = new SessionStateCursor({
+      history: [],
+      inbox: { claimSessionHooks: async () => {} },
+      serializedContext,
+      sessionState: {
+        ...base,
+        snapshot: { session: writeTaskTable(base.snapshot.session, table) },
+      },
+      sessionWritable: new WritableStream<Uint8Array>(),
+    });
+    const request = (runId: string) => ({
+      from: {
+        callId: "reviewer-call",
+        input: {},
+        runId,
+        sequence: 2,
+        stepIndex: 0,
+        taskId: created.taskId,
+        toolName: "reviewer",
+        turnId: "turn_1",
+      },
+      kind: "request" as const,
+      replyTo: `${runId}-reply`,
+      request: { kind: "sandbox-request" as const },
+    });
+
+    const runtime = await createTestRuntime({ agent: { name: "support" } });
+    await runtime.run(async () => {
+      await handleWorkflowToolRunMessage({ cursor, message: request("reviewer-run-1") });
+      expect(runtime.sandboxEvents).toEqual([]);
+      expect(cursor.sessionState.snapshot.session.sandboxState).toBeUndefined();
+
+      await handleWorkflowToolRunMessage({ cursor, message: request("reviewer-run-2") });
+    });
+    expect(runtime.sandboxEvents).toEqual(["definition:support-session", "start:support-session"]);
+    expect(cursor.sessionState.snapshot.session.sandboxState?.session).toMatchObject({
+      providerName: "eve-test-memory",
+    });
+  });
 });
