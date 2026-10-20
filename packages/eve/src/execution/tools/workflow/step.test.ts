@@ -17,14 +17,14 @@ import type {
 const hooks = vi.hoisted(() => ({ replies: [] as unknown[] }));
 vi.mock("#compiled/@workflow/core/index.js", () => ({
   // Awaiting a hook yields its first payload. Only a reply hook waits for its registration,
-  // and it receives the next queued reply.
+  // and it receives the next queued reply, or none while the queue is empty.
   createHook: () => {
     let deliver!: (value: unknown) => void;
     const payload = new Promise((resolve) => (deliver = resolve));
     return Object.assign(payload, {
       token: "reply-token",
       getConflict: async () => {
-        deliver(hooks.replies.shift());
+        if (hooks.replies.length > 0) deliver(hooks.replies.shift());
         return null;
       },
     });
@@ -99,10 +99,23 @@ it("asks the session for its sandbox once per call and runs the step again with 
   expect(received).toEqual([undefined, opened, opened]);
   expect(sent).toEqual([request]);
 
-  // A serve task's next call asks again; the session's answer can be that it could not open one.
+  // A serve task's next call has no captured state either, and reuses the session's sandbox.
   ctx.callId = "call-b";
   run.from = { callId: "call-b" } as WorkflowToolRunRef;
+  await expect(step(ctx)).resolves.toBe("done");
+  expect(received.at(-1)).toEqual(opened);
+  expect(sent).toEqual([request]);
+
+  // Another run asks too; the session can answer that it could not open its sandbox.
+  delete run.sessionSandbox;
   hooks.replies.push({ kind: "failed", message: "could not open the session's sandbox: quota" });
   await expect(step(ctx)).rejects.toThrow("could not open the session's sandbox: quota");
-  expect(sent).toEqual([request, { ...request, from: { callId: "call-b" } }]);
+
+  // A call cancelled while the session has not answered stops waiting.
+  const cancel = new AbortController();
+  const cancelled = { ...ctx, abortSignal: cancel.signal };
+  attachWorkflowToolRunContext(cancelled, run);
+  const waiting = step(cancelled);
+  cancel.abort(new Error("turn cancelled"));
+  await expect(waiting).rejects.toThrow("turn cancelled");
 });

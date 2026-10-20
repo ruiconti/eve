@@ -41,11 +41,11 @@ export interface WorkflowToolRunContext {
   readonly from: WorkflowToolRunRef;
   readonly owner: WorkflowToolRunInbox;
   /**
-   * The sandbox state the session sent a call's step that asked for its
-   * sandbox, which that call's later steps resume too. A later call of a
-   * `serve` task reads the state captured for it instead.
+   * The sandbox state the session last sent a step that asked for its
+   * sandbox. Steps without captured state resume it, including steps of a
+   * `serve` task's later calls: the session keeps one sandbox.
    */
-  sessionSandbox?: { readonly callId: string; readonly state: SandboxState };
+  sessionSandbox?: SandboxState;
 }
 
 type WorkflowToolRunContextCarrier = {

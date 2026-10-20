@@ -101,7 +101,7 @@ async function executeAuthorizedStep(
       if (result.kind === "sandbox-required") {
         try {
           const state = await requestSessionSandbox(run, ctx.abortSignal);
-          run.sessionSandbox = { callId: ctx.callId, state };
+          run.sessionSandbox = state;
         } catch (error) {
           if (!ctx.abortSignal.aborted) {
             await reportPendingAsFailed(run, ctx.abortSignal, pending);
@@ -135,7 +135,7 @@ async function invokeAuthorizedStep(input: {
   readonly run: WorkflowToolRunContext;
 }): Promise<WorkflowStepResult> {
   const { args, authorizationResults, callbackToken, ctx, execute, receiver, run } = input;
-  const received = run.sessionSandbox?.callId === ctx.callId ? run.sessionSandbox.state : undefined;
+  const captured = run.agentContext.sandbox.state;
   const context: WorkflowStepContext = {
     callId: ctx.callId,
     toolName: ctx.toolName,
@@ -147,7 +147,7 @@ async function invokeAuthorizedStep(input: {
     sandbox: {
       bundle: run.agentContext.bundle,
       sessionId: run.agentContext.sandbox.sessionId,
-      state: received ?? run.agentContext.sandbox.state,
+      state: captured?.session == null ? (run.sessionSandbox ?? captured) : captured,
     },
   };
   const invocation: WorkflowStepInvocation = {

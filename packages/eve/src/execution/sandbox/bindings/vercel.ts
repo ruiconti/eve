@@ -266,7 +266,7 @@ export function createVercelSandbox(
       };
     },
   };
-  // `start` finds a session's sandbox by name, so keyed tool sessions and workflow steps can reuse it.
+  // `start` finds a session's sandbox by name, so keyed tool sessions can reuse it.
   // A handle is only an SDK client, so a call that ends has nothing to free.
   return withSessionSandboxReopen(implementation);
 }

@@ -10,7 +10,7 @@ import type { SandboxProviderHandle, SandboxProviderRuntime } from "#shared/sand
  */
 
 /** What a binding whose `start` reopens a session's sandbox tells the callers that use it. */
-export interface SessionSandboxReopenSupport {
+interface SessionSandboxReopenSupport {
   /**
    * Frees what a caller's handle holds in this process once the caller is
    * done, leaving the session's sandbox for later and overlapping callers.

@@ -29,11 +29,13 @@ export interface WorkflowAgentMetadata {
  * Context capabilities available inside an authored `"use step"` helper.
  *
  * `getSandbox()` opens the sandbox of the session that made the call, the
- * same sandbox its turns use. The step does not own it: eve releases the
- * step's handle when the step ends and never stops or deletes the sandbox for
- * it, and `delete()` throws. Steps can retry, so make sandbox writes safe to
- * repeat. Only providers that reopen a session's sandbox by session id, Vercel
- * Sandbox and just-bash, support it; others throw.
+ * same sandbox its turns use, on any sandbox provider. If the session has not
+ * opened its sandbox yet, the first `getSandbox()` asks the session to open
+ * it and the step runs again from the start, so work before that call can
+ * repeat. The step does not own the sandbox: eve releases the step's handle
+ * when the step ends and never stops or deletes the sandbox for it, and
+ * `stop()` and `delete()` throw. Steps can retry, so make sandbox writes safe
+ * to repeat.
  */
 export type WorkflowStepToolContext = Pick<
   ToolContext,
