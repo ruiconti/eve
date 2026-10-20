@@ -142,13 +142,14 @@ const TEMPLATE_IMAGE = dockerTemplateImageReference({
   templateKey: TEMPLATE_KEY,
 });
 const SESSION_KEY = "eve-sbx-ses-local-session-1";
-const PROVIDER_CONTAINER_NAME = `eve-sbx-${createSandboxProviderIdentity({
-  artifact: { imageReference: TEMPLATE_IMAGE },
-  environment: createDockerSandboxOptionsHash(resolveDockerSandboxOptions(undefined)),
-  open: {},
-  sessionId: SESSION_KEY,
-  version: 1,
-}).slice(0, 32)}`;
+/** The session container's name, which derives from the app's storage path and the session key alone. */
+function providerContainerName(appRoot: string): string {
+  return `eve-sbx-${createSandboxProviderIdentity({
+    namespace: appRoot,
+    sessionId: SESSION_KEY,
+    version: 2,
+  }).slice(0, 32)}`;
+}
 
 describe("Docker provider prewarm", () => {
   it("uses a colocated Dockerfile as the template base image", async () => {
@@ -449,7 +450,7 @@ describe("Docker provider create", () => {
       });
 
       const run = findCall(calls, (args) => args[0] === "run");
-      expect(run?.args).toContain(PROVIDER_CONTAINER_NAME);
+      expect(run?.args).toContain(providerContainerName(appRoot));
       expect(run?.args).toContain("eve.sandbox.role=session");
       expect(run?.args.at(-3)).toBe(TEMPLATE_IMAGE);
 
@@ -466,7 +467,7 @@ describe("Docker provider create", () => {
         "stop",
         "-t",
         "0",
-        fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME),
+        fakeDockerContainerIdentity(providerContainerName(appRoot)),
       ]);
     } finally {
       if (previousRunId === undefined) {
@@ -493,7 +494,7 @@ describe("Docker provider create", () => {
 
     expect(findCall(calls, (args) => args[0] === "start")?.args).toEqual([
       "start",
-      PROVIDER_CONTAINER_NAME,
+      providerContainerName(appRoot),
     ]);
     expect(findCall(calls, (args) => args[0] === "run")).toBeUndefined();
   });
@@ -530,7 +531,7 @@ describe("Docker provider create", () => {
         peerCreated = true;
         return {
           exitCode: 125,
-          stderr: `docker: Error response from daemon: Conflict. The container name "/${PROVIDER_CONTAINER_NAME}" is already in use by container "d6b4ad87".`,
+          stderr: `docker: Error response from daemon: Conflict. The container name "/${providerContainerName(appRoot)}" is already in use by container "d6b4ad87".`,
         };
       }
       return undefined;
@@ -557,11 +558,11 @@ describe("Docker provider create", () => {
       appRoot,
       sandboxName: SESSION_KEY,
     });
-    return { calls, handle, killedStreams };
+    return { appRoot, calls, handle, killedStreams };
   }
 
   it("spawns commands through a pid-recording bash -lc wrapper with cwd and env", async () => {
-    const { calls, handle } = await createRunningSessionHandle({
+    const { appRoot, calls, handle } = await createRunningSessionHandle({
       respond: (args) => {
         if (args[0] === "exec" && args.includes("bash")) {
           return { exitCode: 0, streamStdout: "staging\n" };
@@ -585,7 +586,7 @@ describe("Docker provider create", () => {
       "/workspace",
       "-e",
       "DEPLOY_ENV=staging",
-      fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME),
+      fakeDockerContainerIdentity(providerContainerName(appRoot)),
       "bash",
       "-c",
     ]);
@@ -599,7 +600,7 @@ describe("Docker provider create", () => {
   });
 
   it("kill() tree-kills inside the container before killing the docker exec client", async () => {
-    const { calls, handle, killedStreams } = await createRunningSessionHandle({});
+    const { appRoot, calls, handle, killedStreams } = await createRunningSessionHandle({});
 
     const spawned = await handle.sandbox.spawn({ command: "sleep 300" });
     const spawnExec = findCall(calls, (args) => args[0] === "exec" && args.includes("bash"));
@@ -612,7 +613,7 @@ describe("Docker provider create", () => {
     const treeKill = findCall(calls, (args) => args.includes("eve-kill-tree"));
     expect(treeKill?.args.slice(0, 2)).toEqual([
       "exec",
-      fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME),
+      fakeDockerContainerIdentity(providerContainerName(appRoot)),
     ]);
     expect(treeKill?.args.at(-1)).toBe(pidFilePath);
     expect(String(treeKill?.args.at(-3))).toContain("kill_tree");
@@ -670,14 +671,14 @@ describe("Docker provider create", () => {
   });
 
   it("maps removePath options onto rm flags", async () => {
-    const { calls, handle } = await createRunningSessionHandle({});
+    const { appRoot, calls, handle } = await createRunningSessionHandle({});
 
     await handle.sandbox.removePath({ force: true, path: "skills/tenant", recursive: true });
 
     const remove = findCall(calls, (args) => args[0] === "exec" && args.includes("rm"));
     expect(remove?.args).toEqual([
       "exec",
-      fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME),
+      fakeDockerContainerIdentity(providerContainerName(appRoot)),
       "rm",
       "-rf",
       "--",
@@ -686,7 +687,7 @@ describe("Docker provider create", () => {
   });
 
   it("applies deny-all by disconnecting every container network", async () => {
-    const { calls, handle } = await createRunningSessionHandle({
+    const { appRoot, calls, handle } = await createRunningSessionHandle({
       respond: (args) => {
         if (isContainerInspect(args) && args[3] === "{{json .NetworkSettings.Networks}}") {
           return { exitCode: 0, stdout: '{"bridge":{}}' };
@@ -704,12 +705,12 @@ describe("Docker provider create", () => {
       "disconnect",
       "--force",
       "bridge",
-      fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME),
+      fakeDockerContainerIdentity(providerContainerName(appRoot)),
     ]);
   });
 
   it("applies allow-all to a deny-all-created container by detaching none before bridge", async () => {
-    const { calls, handle } = await createRunningSessionHandle({
+    const { appRoot, calls, handle } = await createRunningSessionHandle({
       respond: (args) => {
         if (isContainerInspect(args) && args[3] === "{{json .NetworkSettings.Networks}}") {
           // Containers created with `--network none` report the special
@@ -731,9 +732,9 @@ describe("Docker provider create", () => {
         "disconnect",
         "--force",
         "none",
-        fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME),
+        fakeDockerContainerIdentity(providerContainerName(appRoot)),
       ],
-      ["network", "connect", "bridge", fakeDockerContainerIdentity(PROVIDER_CONTAINER_NAME)],
+      ["network", "connect", "bridge", fakeDockerContainerIdentity(providerContainerName(appRoot))],
     ]);
   });
 

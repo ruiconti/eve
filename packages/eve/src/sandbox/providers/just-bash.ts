@@ -9,7 +9,7 @@ export const JustBashSandbox = defineSandboxProvider<
   JustBashEnvironmentOptions,
   undefined,
   { readonly templateKey: string },
-  { readonly generation: string; readonly rootPath: string; readonly version: 2 },
+  { readonly version: 3 },
   SandboxSession
 >({
   name: "just-bash",

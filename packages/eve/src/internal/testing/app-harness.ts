@@ -120,6 +120,8 @@ export interface TestRuntime {
     tool: string | Pick<ResolvedToolDefinition, "name">,
     input: unknown,
   ): Promise<unknown>;
+  /** Session ids whose sandbox cleanup ran when the session ended, in order. */
+  readonly sandboxCleanups: readonly string[];
   /**
    * Clears the compiled-artifact snapshot, bundle cache, and sessions' sandboxes.
    * Tests that re-use a runtime across multiple assertions can call this to
@@ -145,10 +147,12 @@ const TEST_SANDBOX_PROVIDER_NAME = "eve-test-memory";
 /**
  * An in-memory sandbox provider that keeps each session's sandbox, so a step
  * that resumes it sees what earlier steps wrote, as with a real provider. A
- * staged attachment, say, is read back on the next model call.
+ * staged attachment, say, is read back on the next model call. `start` is an
+ * upsert on the session id, and session-end cleanup deletes by it.
  */
 function createTestSandboxProvider() {
   const sessionSandboxes = new Map<string, MockSandbox>();
+  const endedSessionIds: string[] = [];
 
   function createHandle(sessionId: string) {
     let sandbox = sessionSandboxes.get(sessionId);
@@ -171,6 +175,12 @@ function createTestSandboxProvider() {
   const provider = defineSandboxProvider({
     name: TEST_SANDBOX_PROVIDER_NAME,
     environment: () => ({
+      async onSessionEnd(context) {
+        endedSessionIds.push(context.session.id);
+        const sandbox = sessionSandboxes.get(context.session.id);
+        sessionSandboxes.delete(context.session.id);
+        await sandbox?.access.delete?.();
+      },
       async prepare() {
         return null;
       },
@@ -182,7 +192,14 @@ function createTestSandboxProvider() {
       },
     }),
   });
-  return { clear: () => sessionSandboxes.clear(), provider };
+  return {
+    clear: () => {
+      sessionSandboxes.clear();
+      endedSessionIds.length = 0;
+    },
+    endedSessionIds,
+    provider,
+  };
 }
 
 export async function createTestRuntime(descriptor: TestAppDescriptor = {}): Promise<TestRuntime> {
@@ -289,6 +306,7 @@ export async function createTestRuntime(descriptor: TestAppDescriptor = {}): Pro
     reset,
     run,
     runAsSession,
+    sandboxCleanups: sandboxes.endedSessionIds,
     session,
     tools,
   };

@@ -624,6 +624,48 @@ describe("createVercelSandbox", () => {
     );
   });
 
+  describe("session identity and cleanup", () => {
+    function session() {
+      const fake = createFakeVercelProvider();
+      const provider = createTestVercelSandbox({
+        loadDeleteSandboxModule: async () => fake.sandboxModule as never,
+        loadSandboxModule: async () => fake.sandboxModule as never,
+      });
+      const start = (
+        input: { readonly networkPolicy?: "deny-all"; readonly snapshotId?: string } = {},
+      ) =>
+        provider.start({
+          appRoot: "/tmp/test-app-root",
+          options: input.networkPolicy === undefined ? {} : { networkPolicy: input.networkPolicy },
+          prepared: { snapshotId: input.snapshotId ?? "snapshot-a" },
+          sandboxName: "session-key",
+        });
+      const end = (state: { readonly sandboxName: string; readonly version: 3 } | null) =>
+        provider.endSession({ appRoot: "/tmp/test-app-root", sandboxName: "session-key", state });
+      return { end, fake, start };
+    }
+
+    it("keeps one sandbox per session key across concurrent starts, open options, and deployments", async () => {
+      const { fake, start } = session();
+
+      const [first, second] = await Promise.all([start(), start()]);
+      const later = await start({ networkPolicy: "deny-all", snapshotId: "snapshot-b" });
+
+      expect(fake.sandboxes.size).toBe(1);
+      expect(second.state).toEqual(first.state);
+      expect(later.state).toEqual(first.state);
+    });
+
+    it("deletes the session's sandbox by key when no state was recorded, and succeeds once it is gone", async () => {
+      const { end, fake, start } = session();
+      await start();
+
+      await end(null);
+      expect(fake.sandboxes.size).toBe(0);
+      await expect(end(null)).resolves.toBeUndefined();
+    });
+  });
+
   describe("tool sessions", () => {
     const DAY_MS = 24 * 60 * 60 * 1000;
     // What the Sandbox API answers a resume whose snapshot expired or was deleted.

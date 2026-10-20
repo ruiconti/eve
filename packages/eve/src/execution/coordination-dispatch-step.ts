@@ -82,7 +82,13 @@ async function dispatchCoordination(
   }
 
   const { batch, session } = prepared;
-  let nextSession = session;
+  // A run started here can open this session's sandbox through an agent that
+  // shares it, which the session's own state never records, so session end
+  // must clean up by key.
+  let nextSession: HarnessSessionBase =
+    session.sandboxState?.mayExist === true
+      ? session
+      : { ...session, sandboxState: { session: null, ...session.sandboxState, mayExist: true } };
   const results: RuntimeActionResult[] = [];
   const started: TaskStartedStreamEvent["data"][] = [];
   const agentLimits = resolveStepAgentLimits(prepared);

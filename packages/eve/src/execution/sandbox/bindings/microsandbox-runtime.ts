@@ -682,7 +682,7 @@ async function createMicrosandbox(input: {
   });
 }
 
-async function removeSandboxIfExists(
+export async function removeSandboxIfExists(
   module: MicrosandboxModule,
   sandboxName: string,
 ): Promise<void> {

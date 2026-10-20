@@ -55,12 +55,12 @@ import {
 } from "#execution/sandbox/bindings/vercel-errors.js";
 import { withToolSessionRetention } from "#execution/sandbox/bindings/vercel-tool-sessions.js";
 import { isToolSessionId } from "#execution/tool-session/id.js";
-import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
 import {
   getNamedVercelSandbox,
   isVercelSnapshotCreated,
 } from "#execution/sandbox/bindings/vercel-lookup.js";
 import {
+  deleteNamedVercelSandbox,
   deleteUnusableVercelSandbox,
   deleteVercelSandbox,
   stopVercelSandbox,
@@ -206,7 +206,14 @@ export function createVercelSandbox(
     return handle;
   }
 
-  const implementation: ReturnType<typeof createVercelSandbox> = {
+  return {
+    async onSessionEnd(context, state) {
+      await deleteNamedVercelSandbox({
+        createOptions,
+        loadDeleteSandboxModule,
+        sandboxName: state?.sandboxName ?? vercelSessionName(context.session.id),
+      });
+    },
     async prepare(context) {
       const seedFiles = providerResourceTargetFiles(context.resources);
       if (
@@ -258,7 +265,7 @@ export function createVercelSandbox(
       return createHandle({ createOptions, loadDeleteSandboxModule, sandbox });
     },
     async start(context, options, artifact) {
-      const sandboxName = vercelSessionName(context.session.id, options, artifact, createOptions);
+      const sandboxName = vercelSessionName(context.session.id);
       const handle = await openSession(context, options, artifact, sandboxName);
       return {
         handle,
@@ -266,25 +273,15 @@ export function createVercelSandbox(
       };
     },
   };
-  // `start` finds a session's sandbox by name, so keyed tool sessions can reuse it.
-  // A handle is only an SDK client, so a call that ends has nothing to free.
-  return withToolSessionSandboxes(implementation);
 }
 
-function vercelSessionName(
-  sessionId: string,
-  options: Readonly<VercelSandboxRuntimeOptions> | undefined,
-  artifactValue: SandboxPreparedArtifact,
-  createOptions: VercelCreateOptions,
-): string {
-  const artifact = requirePreparedVercelTemplate(artifactValue);
-  return `eve-sbx-vercel-${createSandboxProviderIdentity({
-    artifact,
-    createOptions: vercelIdentityOptions(createOptions),
-    options: vercelIdentityOptions(options),
-    sessionId,
-    version: 1,
-  }).slice(0, 32)}`;
+/**
+ * The session's sandbox name. Sandbox names are unique within a Vercel
+ * project, so the session id alone keeps it stable across deployments and
+ * open options; those apply only when the sandbox is created.
+ */
+function vercelSessionName(sessionId: string): string {
+  return `eve-sbx-vercel-${createSandboxProviderIdentity({ sessionId, version: 2 }).slice(0, 32)}`;
 }
 
 function vercelIdentityOptions(options: object | undefined): object | undefined {

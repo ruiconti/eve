@@ -300,10 +300,7 @@ describe("just-bash sandbox file API", () => {
 
     await firstHandle.onSandboxStop();
 
-    expect(state).toMatchObject({ version: 2 });
-    await expect(
-      readFile(join(state.rootPath, "fs", "workspace", "persisted.txt"), "utf8"),
-    ).resolves.toBe("survives reconnect");
+    expect(state).toEqual({ version: 3 });
 
     const reconnectedHandle = await provider.openSession({
       existing: state,
@@ -313,6 +310,21 @@ describe("just-bash sandbox file API", () => {
     const content = await reconnectedHandle.sandbox.readTextFile({ path: "persisted.txt" });
 
     expect(content).toBe("survives reconnect");
+  });
+
+  it("removes the session root by key at session end, so the next start is fresh", async () => {
+    const appRoot = await createTemporaryCacheDirectory("session-end");
+    const provider = createJustBashProvider();
+    await provider.prepare({ appRoot, seedFiles: [] });
+    const session = { appRoot, sandboxName: "session-end" };
+    const { handle } = await provider.start(session);
+    await handle.sandbox.writeTextFile({ content: "left behind", path: "left.txt" });
+
+    await provider.endSession({ ...session, state: null });
+    await provider.endSession({ ...session, state: null });
+
+    const fresh = await provider.openSession(session);
+    await expect(fresh.sandbox.readTextFile({ path: "left.txt" })).resolves.toBeNull();
   });
 
   it("supports readFile with line range options", async () => {
