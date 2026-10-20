@@ -486,7 +486,7 @@ describe("just-bash provider", () => {
     expect(result.stdout.trim().split("\n")).toEqual(["/workspace/skills/weather.md"]);
   });
 
-  it("rejects existing session state from a different prepared artifact", async () => {
+  it("keeps a session's files when a later preparation changes the artifact", async () => {
     const appRoot = await createTemporaryCacheDirectory("seed-session");
     const provider = createJustBashProvider();
 
@@ -499,6 +499,7 @@ describe("just-bash provider", () => {
       appRoot,
       sandboxName: "session-seeded-later",
     });
+    await initialHandle.sandbox.writeTextFile({ content: "kept", path: "notes.txt" });
     await initialHandle.onRuntimeShutdown();
 
     await provider.prepare({
@@ -511,12 +512,12 @@ describe("just-bash provider", () => {
       ],
     });
 
-    await expect(
-      provider.openSession({
-        existing: initialState,
-        appRoot,
-        sandboxName: "session-seeded-later",
-      }),
-    ).rejects.toThrow("session state is incompatible");
+    const resumed = await provider.openSession({
+      existing: initialState,
+      appRoot,
+      sandboxName: "session-seeded-later",
+    });
+    await expect(resumed.sandbox.readTextFile({ path: "notes.txt" })).resolves.toBe("kept");
+    await expect(resumed.sandbox.readTextFile({ path: "skills/weather.md" })).resolves.toBeNull();
   });
 });
