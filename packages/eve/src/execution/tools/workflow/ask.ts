@@ -41,10 +41,12 @@ export interface WorkflowToolRunContext {
   readonly from: WorkflowToolRunRef;
   readonly owner: WorkflowToolRunInbox;
   /**
-   * The state of the session's sandbox once a step of this run started it,
-   * which later steps resume instead of starting it again.
+   * The session's sandbox a step started while serving a call, which that
+   * call's later steps resume instead of starting it again. A later call of a
+   * `serve` task reads its own state instead, which the session may since have
+   * recorded, or deleted.
    */
-  sandboxState?: SandboxState;
+  startedSandbox?: { readonly callId: string; readonly state: SandboxState };
 }
 
 type WorkflowToolRunContextCarrier = {
