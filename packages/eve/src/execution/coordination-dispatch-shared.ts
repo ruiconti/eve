@@ -29,6 +29,7 @@ import {
   storedProjection,
   turnPosition,
 } from "#harness/session-machine/view.js";
+import type { TaskStartedStreamEvent } from "#protocol/message.js";
 import type { RuntimeActionResult, RuntimeWorkflowTaskRequest } from "#shared/action-types.js";
 import type { SessionParent, SessionTraceRoot } from "#channel/types.js";
 import type { ContextReader } from "#context/key.js";
@@ -46,7 +47,6 @@ import type { WorkflowAgentMetadata } from "#tools/workflow-definition.js";
 /** Input shared by direct and Workflow-originated owner-side dispatch. */
 export interface CoordinationDispatchInput {
   readonly workflowToolRunOwner: WorkflowToolRunOwner;
-  readonly sessionWritable: WritableStream<Uint8Array>;
   readonly serializedContext: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
 }
@@ -56,6 +56,8 @@ export interface CoordinationDispatchResult {
   readonly results: readonly RuntimeActionResult[];
   readonly serializedContext: Record<string, unknown>;
   readonly sessionState: DurableSessionState;
+  /** The tasks the dispatch started or sent to, for the step that publishes `task.started`. */
+  readonly started: readonly TaskStartedStreamEvent["data"][];
 }
 
 /** Everything preflight produces before either step's dispatch loop runs. */
@@ -90,10 +92,8 @@ export interface PreparedCoordinationDispatch<PlanEntry = RuntimeWorkflowTaskReq
 
 /**
  * Runs every dispatch precondition that may throw — durable reads, context
- * deserialization, handle-store validation, and batch planning — before
- * the caller acquires the parent stream writer, so a preflight failure
- * never leaks the writer lock. Returns undefined when no actions are
- * pending.
+ * deserialization, handle-store validation, and batch planning — before any
+ * run starts. Returns undefined when no actions are pending.
  */
 export async function prepareCoordinationDispatch(input: {
   readonly serializedContext: Record<string, unknown>;
