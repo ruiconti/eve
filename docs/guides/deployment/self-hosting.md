@@ -51,9 +51,9 @@ See [Workflow Worlds](https://workflow-sdk.dev/worlds) for the underlying Workfl
 
 A session is **stranded** when its owner run was built by another eve version and the current deployment cannot replay it. Its recorded history remains readable, but it cannot process new work. Sessions whose runs recorded no eve version are treated the same way.
 
-Send a new message to the same **channel address**, such as a Slack thread, to start a replacement session. eve sets `ctx.session.predecessor.sessionId` to the session it replaced. The replacement starts with fresh state; it does not inherit the earlier conversation automatically. Sending to an exact session ID is refused rather than creating a replacement; see [TypeScript client recovery](../client/messages) for resetting that session and creating a new one.
+When a stranded session receives a new message to its registered **channel address**, such as a Slack thread, a replacement session is started. The session context of this replacement session has `ctx.session.predecessor.sessionId` populated with the id of the stranded session. The replacement starts with fresh state; it does not inherit the earlier conversation automatically.
 
-To give the replacement the earlier conversation, add a [dynamic instruction](../../instructions#dynamic-instructions) that reads the predecessor's transcript at `session.started`:
+To give the replacement access to the earlier conversation, add a [dynamic instruction](../../instructions#dynamic-instructions) that reads the predecessor's transcript on `session.started`:
 
 ```ts title="agent/instructions/replaced-conversation.ts"
 import { transcriptReducer } from "eve/client";
@@ -86,11 +86,7 @@ export default defineDynamic({
 });
 ```
 
-`follow: false` ends the read at the recorded tail. The example reads at most 2,000 events within five seconds and keeps the newest 40 messages. The reducer returns imported history, user text, and completed assistant replies since the last clear; it omits reasoning, tool calls, and attachments. The instruction enters the replacement's history before its first message. Keep it in the user role because the transcript contains user-authored text.
-
-This restores conversation text, not tools, approvals, sandbox files, authored state, or interrupted work. Read only the predecessor ID eve provides; `sessions.attach()` does not check channel authorization. Skip recovery if your agent uses `experimental.workflow.retention: 0`.
-
-In runtime logs, `Reset stranded session` names the previous session ID, both eve versions, and the `trigger` (`message`, `reset`, or `timeout`). Startup recovery warns `Skipping replay of stranded session run` for skipped root sessions; cancelled descendants log `Retired stranded descendant run`.
+This adds conversation text as context to the replacement session.
 
 ## Select a sandbox provider
 
