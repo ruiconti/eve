@@ -69,6 +69,8 @@ Reset cannot be undone. It cancels the stranded run without executing its code o
 
 A stranded root session keeps its address until a channel message replaces it, an explicit reset ends it, or its [session timeout](../../agent-config#runtime-limits) elapses. With `sessionTimeoutMs: false`, it waits until a message or reset. Stranded subagent sessions and workflow tool runs are cancelled separately when the world next delivers work to them; ending the root session does not find or cancel them. Cancel any remaining runs directly in your Workflow world if needed.
 
+In runtime logs, `Reset stranded session` names the previous session ID, both eve versions, and the `trigger` (`message`, `reset`, or `timeout`). Startup recovery warns `Skipping replay of stranded session run` for skipped root sessions; cancelled descendants log `Retired stranded descendant run`.
+
 The same version boundary applies in `eve dev`. A previous invocation's session built by the same eve version is not stranded; use [local workflow recovery](../../reference/cli#local-workflow-recovery) to resume it.
 
 ## Select a sandbox provider
