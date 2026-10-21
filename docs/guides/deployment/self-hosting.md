@@ -34,6 +34,7 @@ You can instead select an installed Workflow world package in the root `agent.ts
 import { defineAgent } from "eve";
 
 export default defineAgent({
+  model: "anthropic/claude-opus-5.5",
   experimental: {
     workflow: {
       world: "@acme/eve-workflow-world",
@@ -59,6 +60,7 @@ A session is **stranded** when its owner run was built by another eve version an
 Recovery depends on how you address the session:
 
 - **Channel address**, such as a Slack thread: the next ordinary message ends the stranded session and starts one fresh session at the same address, even when messages arrive concurrently. A delivery containing input responses is refused instead, because a fresh session has no matching request. See [custom channel operations](../../channels/custom#channel-operations-and-session-handles).
+- **`create()` on a channel address**: eve refuses to replace the stranded session. Reset the address, then call `create()` again. See [Start from prior history](../../channels/eve#start-from-prior-history).
 - **Session ID**: sends and live streams report `session_stranded`; eve never replaces the session implicitly. Read any history you need with `stream({ follow: false })`, reset the old session, and explicitly create a new one. Clear is refused because it would preserve a session that cannot run. See [the eve HTTP channel](../../channels/eve#start-and-continue-a-session) and [TypeScript client recovery](../client/messages).
 
 A replacement starts with its own ID and state, without the earlier conversation. Automatic channel replacement supplies `ctx.session.predecessor.sessionId` so your instructions can optionally [read the earlier conversation](../session-context#read-a-replaced-sessions-conversation). An explicit reset leaves the next session no predecessor link. Messages accepted before the upgrade are not redelivered.

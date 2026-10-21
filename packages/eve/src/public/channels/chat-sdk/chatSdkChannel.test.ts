@@ -171,6 +171,87 @@ describe("chatSdkChannel", () => {
     ]);
   });
 
+  it("records each delivery's message as the thread's latest, skipping the bot's own", () => {
+    const bridge = chatSdkChannel({
+      adapters: { test: testAdapter() },
+      state: memoryState(),
+      userName: "bot",
+    });
+    const adapter = getAdapter(bridge.channel);
+    const state: ChatSdkChannelState = { thread: null };
+    const deliver = (id: string, isMe: boolean) =>
+      adapter.deliver?.(
+        {
+          message: "hello",
+          state: {
+            thread: {
+              _type: "chat:Thread",
+              adapterName: "test",
+              channelId: CHANNEL_ID,
+              currentMessage: { author: { isBot: isMe, isMe, userId: id }, id },
+              id: THREAD_ID,
+              isDM: true,
+            },
+          },
+        } as never,
+        { session: { auth: { current: null } }, state } as never,
+      );
+
+    deliver("first", false);
+    deliver("second", false);
+    deliver("bot-post", true);
+
+    expect(state.latestMessageId).toBe("second");
+  });
+
+  it("answers only the waiting request on the card a delivery's inputAnswer names", () => {
+    const bridge = chatSdkChannel({
+      adapters: { test: testAdapter() },
+      state: memoryState(),
+      userName: "bot",
+    });
+    const adapter = getAdapter(bridge.channel);
+    const approval = {
+      kind: "tool-approval",
+      options: [
+        { id: "approve", label: "Approve" },
+        { id: "cancel", label: "Cancel" },
+      ],
+      prompt: "Approve Deploy?",
+    };
+    const state: ChatSdkChannelState = {
+      pendingInputCards: {
+        "answered-card": {
+          requests: [{ ...approval, requestId: "answered" }],
+          resolved: { answered: { outcome: "answered", requestId: "answered" } },
+        },
+        "deploy-card": { requests: [{ ...approval, requestId: "deploy" }], resolved: {} },
+      },
+      thread: null,
+    } as never;
+    const deliver = (messageId: string, optionId: string) =>
+      adapter.deliver?.(
+        {
+          context: [],
+          message: "Tapback: Liked a message",
+          state: { inputAnswer: { messageId, optionId } },
+        } as never,
+        { session: { auth: { current: null } }, state } as never,
+      );
+
+    expect(deliver("deploy-card", "approve")).toEqual({
+      context: [],
+      inputResponses: [{ optionId: "approve", requestId: "deploy" }],
+    });
+    expect(deliver("other-message", "approve")).toMatchObject({
+      message: "Tapback: Liked a message",
+    });
+    expect(deliver("answered-card", "approve")).toMatchObject({
+      message: "Tapback: Liked a message",
+    });
+    expect(deliver("deploy-card", "maybe")).toMatchObject({ message: "Tapback: Liked a message" });
+  });
+
   it("routes GET verification challenges to the adapter webhook", async () => {
     const bridge = chatSdkChannel({
       adapters: { test: testAdapter() },
@@ -1018,6 +1099,66 @@ describe("chatSdkChannel", () => {
       },
       fallbackText: "Deploy?\n\n1. Approve\n2. Cancel\n\nReply with a number to choose.",
     });
+  });
+
+  it("tracks posted input cards without edit support, so an answer can name its card", async () => {
+    const adapter = testAdapter();
+    adapter.editError = new NotImplementedError("editMessage");
+    const bridge = chatSdkChannel({
+      adapters: { test: adapter },
+      concurrency: "concurrent",
+      state: memoryState(),
+      logger: "warn",
+      userName: "bot",
+    });
+    const state: ChatSdkChannelState = { thread: serializedThread() };
+    const channelAdapter = withState(getAdapter(bridge.channel), state);
+    const ctx = buildAdapterContext(channelAdapter, stubAccessor());
+    const request = (requestId: string) => ({
+      action: { callId: `call-${requestId}`, name: "deploy", type: "tool-call" as const },
+      display: "confirmation" as const,
+      options: [
+        { id: "approve", label: "Approve" },
+        { id: "cancel", label: "Cancel" },
+      ],
+      prompt: "Deploy?",
+      requestId,
+    });
+
+    await callEvent(
+      channelAdapter,
+      makeEvent("input.requested", {
+        requests: [request("request-1")],
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+    await callEvent(
+      channelAdapter,
+      makeEvent("input.resolved", {
+        resolutions: [{ optionId: "approve", requestId: "request-1" }],
+        sequence: 2,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+    expect(state.editSupported).toBe(false);
+    expect(state.pendingInputCards).toEqual({});
+
+    await callEvent(
+      channelAdapter,
+      makeEvent("input.requested", {
+        requests: [request("request-2")],
+        sequence: 3,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+    expect(Object.keys(state.pendingInputCards ?? {})).toEqual(["posted-2"]);
   });
 
   it("asks for a typed reply when an input request accepts a freeform answer", async () => {

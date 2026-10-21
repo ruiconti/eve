@@ -93,7 +93,7 @@ export default defineDynamic({
 
 The resolver runs before the replacement's first model call, and its result enters the replacement's durable history once, ahead of the new message. In a session that replaced no other, `ctx.session.predecessor` is undefined and the instruction contributes nothing.
 
-`transcriptReducer()` keeps user message text and completed assistant text, oldest first, as `{ role, text }` messages. Reasoning, tool calls and results, attachments, approvals, and output from a turn that never completed are left out. A clear in the earlier session starts the transcript over, so text the user cleared is never returned. `maxMessages` keeps only the newest messages.
+`transcriptReducer()` keeps history added with `history`, user message text, and completed assistant text, oldest first, as `{ role, text }` messages. Reasoning, tool calls and results, attachments, approvals, and output from a turn that never completed are left out. A clear in the earlier session starts the transcript over, so text the user cleared is never returned. `maxMessages` keeps only the newest messages.
 
 The read and the prompt are yours to bound:
 

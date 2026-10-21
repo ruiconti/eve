@@ -15,13 +15,14 @@ import {
   type SessionInboxPayload,
 } from "#execution/session-inbox/inbox.js";
 import { sessionHookTokens } from "#execution/session/hook-tokens.js";
-import { DEFAULT_SESSION_TIMEOUT_MS, sessionTimeoutDeadline } from "#execution/session/timeout.js";
+import { DEFAULT_SESSION_TIMEOUT_MS } from "#execution/session/timeout.js";
 import {
   createSessionTimeoutControl,
   type SessionTimeoutControl,
 } from "#execution/session/timeout-control.js";
 import { createTurnControl, type TurnControl } from "#execution/session/turn-control.js";
 import { hasDelegatedSessionContext } from "#execution/delegated-session-context.js";
+import type { AgentSessionRuntimeOverrides } from "#execution/agent-sessions/runtime-overrides.js";
 import type { DynamicSubagentAgentConfig } from "#runtime/subagents/dynamic-agent-config.js";
 import { attachClientContext, readClientContext } from "#internal/client-context.js";
 import { settleContinuationConflictStep } from "#execution/continuation-conflict-step.js";
@@ -107,8 +108,8 @@ async function prepareInitialOwner(
   inbox: SessionInboxHandle,
   input: {
     readonly continuationToken: string;
-    readonly deadline: Date | undefined;
     readonly sessionId: string;
+    readonly sessionTimeoutMs: number | false;
   },
 ): Promise<InitialOwnerPreparation> {
   const [stableClaim, aliasClaim] = await Promise.allSettled([
@@ -124,10 +125,10 @@ async function prepareInitialOwner(
   }
 
   const turnControl = createTurnControl();
-  const timeoutControl =
-    input.deadline === undefined
-      ? undefined
-      : createSessionTimeoutControl({ deadline: input.deadline, sessionId: input.sessionId });
+  const timeoutControl = createSessionTimeoutControl({
+    sessionId: input.sessionId,
+    timeoutMs: input.sessionTimeoutMs,
+  });
   const owner: OwnedInitialSession = {
     kind: "owned",
     timeoutControl,
@@ -169,8 +170,6 @@ export async function bootInitialOwner(
   const sessionWritable = getWritable<Uint8Array>();
   const inbox = createSessionInbox(sessionId);
   const sessionTimeoutMs = input.sessionTimeoutMs ?? DEFAULT_SESSION_TIMEOUT_MS;
-  // Workflow's clock is replay-stable; its optimistic startedAt metadata is not.
-  const deadline = sessionTimeoutDeadline(sessionTimeoutMs, Date.now());
   const continuationToken = (serializedContext["eve.continuationToken"] as string) || "";
   const serializedBundle = serializedContext["eve.bundle"] as {
     source: DurableCompiledArtifactsSource;
@@ -179,12 +178,16 @@ export async function bootInitialOwner(
   let owner: OwnedInitialSession | undefined;
   try {
     const sessionCreationPromise = createSessionStep({
+      agentSessionRuntimeOverrides: serializedContext["eve.agentSessionRuntimeOverrides"] as
+        | AgentSessionRuntimeOverrides
+        | undefined,
       compiledArtifactsSource: serializedBundle.source,
       continuationToken,
       dynamicSubagentAgentConfig: serializedContext["eve.dynamicSubagentAgentConfig"] as
         | DynamicSubagentAgentConfig
         | undefined,
-      inheritedLimits: input.limits,
+      // With a first message, its delivery carries the history instead.
+      history: input.input.message === undefined ? input.input.history : undefined,
       nodeId: serializedBundle.nodeId,
       outputSchema: input.input.outputSchema,
       rootSessionId: readRootSessionId(serializedContext),
@@ -192,8 +195,8 @@ export async function bootInitialOwner(
     });
     const ownerPreparationPromise = prepareInitialOwner(inbox, {
       continuationToken,
-      deadline,
       sessionId,
+      sessionTimeoutMs,
     });
     const callerResolutionPromise = hasDelegatedSessionContext(serializedContext)
       ? resolveInitialTurnCallerStep({ serializedContext })
@@ -222,6 +225,7 @@ export async function bootInitialOwner(
     return {
       inbox,
       session: {
+        admittedDeliveryKeys: input.idempotencyKey === undefined ? [] : [input.idempotencyKey],
         anchor: { kind: "self" },
         caller,
         capabilities: serializedContext["eve.capabilities"] as SessionCapabilities | undefined,
@@ -238,7 +242,6 @@ export async function bootInitialOwner(
         sessionState: created.state,
         sessionTimeoutControl: prepared.timeoutControl,
         sessionTimeoutMs,
-        sessionTimeoutDeadline: deadline,
         sessionWritable,
       },
     };
@@ -435,16 +438,11 @@ async function startSuccessor(
   if (childRunIdsToStop.length > 0) {
     await stopUntrackedChildSessionsStep({ runIds: childRunIdsToStop, sessionId });
   }
-  const deadline =
-    input.reason === "compaction"
-      ? input.sessionTimeoutDeadline
-      : sessionTimeoutDeadline(checkpoint.sessionTimeoutMs, Date.now());
-  const timeoutControl =
-    deadline === undefined ? undefined : createSessionTimeoutControl({ deadline, sessionId });
   return {
     inbox,
     session: {
       anchor: { kind: "successor" },
+      admittedDeliveryKeys: checkpoint.admittedDeliveryKeys,
       caller: input.delivery?.caller,
       capabilities: checkpoint.capabilities,
       deploymentId: input.ownerDeploymentId,
@@ -455,10 +453,11 @@ async function startSuccessor(
       serializedContext,
       sessionId,
       sessionState: checkpoint.sessionState,
-      sessionTimeoutControl: timeoutControl,
+      sessionTimeoutControl: createSessionTimeoutControl({
+        sessionId,
+        timeoutMs: checkpoint.sessionTimeoutMs,
+      }),
       sessionTimeoutMs: checkpoint.sessionTimeoutMs,
-      // A deployment handoff renews the configured lifetime; compaction keeps the deadline.
-      sessionTimeoutDeadline: deadline,
       sessionWritable: input.sessionWritable,
     },
   };
@@ -470,6 +469,7 @@ function createInitialDelivery(
 ): DeliverHookPayload | undefined {
   if (input.input.message === undefined) return undefined;
   return {
+    idempotencyKey: input.idempotencyKey,
     schedule: readSerializedSessionSchedule(serializedContext),
     deliveryMetadata:
       serializedContext["eve.channelDelivery"] === undefined
@@ -486,6 +486,7 @@ function createInitialDelivery(
         {
           message: input.input.message,
           context: input.input.context,
+          history: input.input.history,
           outputSchema: input.input.outputSchema,
           state: input.input.state,
         },
