@@ -3,6 +3,7 @@ import { ContextContainer, contextStorage } from "#context/container.js";
 import { AuthKey, InitiatorAuthKey, SandboxKey, SessionIdKey, SessionKey } from "#context/keys.js";
 import type { SessionContext } from "#context/session-context.js";
 import { ensureSandboxAccess, type EnsuredSandboxAccess } from "#execution/sandbox/ensure.js";
+import { releaseSandboxHandle } from "#execution/sandbox/handle-release.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { resolveDurableCompiledArtifactsSource } from "#runtime/durable-compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
@@ -124,9 +125,9 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
  * The calling session's sandbox, opened on the step's first `ctx.getSandbox()`
  * under the key of the session that owns it, and let go of when the step
  * ends. Recorded state, when the call captured it, resumes the sandbox;
- * otherwise the provider's `start` upserts it by that key with the owner's
- * sandbox definition, so the session finds the same sandbox and its
- * session-end cleanup removes it. The step never owns the sandbox: the
+ * without it, or when that sandbox is gone, the provider's `start` upserts
+ * it by that key with the owner's sandbox definition, so the session finds
+ * the same sandbox and its session-end cleanup removes it. The step never owns the sandbox: the
  * session's turns may be using it, so the step can neither stop nor delete it.
  * A step that never asks for it loads nothing.
  */
@@ -137,6 +138,7 @@ function openStepSandbox(input: WorkflowStepContext) {
   const delivery = contextStorage.getStore();
   const resolveSource = () => resolveDurableCompiledArtifactsSource(bundle.source);
   let opening: Promise<EnsuredSandboxAccess> | undefined;
+  let released = false;
   const open = async (): Promise<EnsuredSandboxAccess> => {
     const compiled = await getCompiledRuntimeAgentBundle({
       compiledArtifactsSource:
@@ -151,7 +153,7 @@ function openStepSandbox(input: WorkflowStepContext) {
       registry: node.sandboxRegistry,
       sessionId,
       state: state ?? null,
-      tracksHandle: false,
+      borrowed: true,
     });
   };
   const openOnce = (): Promise<EnsuredSandboxAccess> => {
@@ -163,6 +165,12 @@ function openStepSandbox(input: WorkflowStepContext) {
   };
   return {
     async open(): Promise<SandboxAccess> {
+      if (released) {
+        throw fatal(
+          `ctx.getSandbox() was called after the "use step" function of tool "${input.toolName}" returned. ` +
+            "Call it inside the step, which lets go of the sandbox when it ends.",
+        );
+      }
       const access = await openOnce();
       return {
         ...access,
@@ -179,13 +187,17 @@ function openStepSandbox(input: WorkflowStepContext) {
       };
     },
     async release(): Promise<void> {
+      released = true;
       const access = await opening?.catch(() => undefined);
-      await access?.detach().catch((error: unknown) => {
+      try {
+        const handle = await access?.detach();
+        if (handle !== undefined) await releaseSandboxHandle(handle);
+      } catch (error) {
         logError(log, "failed to release a workflow step's sandbox", error, {
           sessionId,
           toolName: input.toolName,
         });
-      });
+      }
     },
   };
 }

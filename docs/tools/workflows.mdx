@@ -470,9 +470,9 @@ async function prepareInput(ctx: WorkflowStepToolContext, input: { value: string
 - The workflow body cannot open the sandbox, because it replays. `ctx.getSandbox()` in the body
   throws and tells you to pass `ctx` to a step helper.
 - The step opens the sandbox directly, with any sandbox provider. If the session recorded its
-  sandbox before it called the tool, the step resumes it. Otherwise the step opens it the way the
-  session's first turn would: it runs your `defineSandbox()` definition, and the provider finds or
-  creates the sandbox by the session's id. The session's later turns open the same sandbox. Your
+  sandbox before it called the tool, the step resumes it. Otherwise, or if that sandbox is gone by
+  the time the step runs, the step opens it the way the session's first turn would: it runs your
+  `defineSandbox()` definition, and the provider finds or creates the sandbox by the session's id. The session's later turns open the same sandbox. Your
   definition can run once for each caller that opens the sandbox before the session records it,
   so make its initialization safe to repeat.
 - The step does not own the sandbox. When the step ends, even by throwing, eve lets go of the

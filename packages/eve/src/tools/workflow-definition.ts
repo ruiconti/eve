@@ -49,9 +49,10 @@ export interface AgentSessionOptions {
  * Context capabilities available inside an authored `"use step"` helper.
  *
  * `getSandbox()` opens the sandbox of the session that made the call, the
- * same sandbox its turns use. If the session has not opened it yet, the step
- * creates it with the session's sandbox definition, so make that definition
- * safe to run again. The step does not own the sandbox: eve lets go of the
+ * same sandbox its turns use. If the session had not recorded its sandbox
+ * when it called the tool, the step opens it with the sandbox definition of
+ * the session that owns it (the parent's, for a session that shares its
+ * parent's sandbox), so make that definition safe to run again. The step does not own the sandbox: eve lets go of the
  * step's handle when the step ends and never stops or deletes the sandbox for
  * it, and `stop()` and `delete()` throw. The session deletes it when the
  * session ends. Steps can retry, so make sandbox writes safe to repeat.
