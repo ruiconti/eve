@@ -1,5 +1,11 @@
 # eve
 
+## 0.82.1
+
+### Patch Changes
+
+- 580417f: Fix repeated horizontal rules and question text accumulating in terminal scrollback during human-in-the-loop prompts. Question and approval drawers now fit small terminals, keeping the focused choice or text editor visible.
+
 ## 0.82.0
 
 ### Minor Changes
