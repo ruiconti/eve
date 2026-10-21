@@ -39,7 +39,6 @@ export function createCompiledSandboxProviderPrunePlugin(): BundlerPluginShape {
           "  return createDefaultVercelEnvironment(vercelOptions);",
           "}",
           'export const DefaultSandbox = { name: "default", environment };',
-          "export const SANDBOX_PROVIDER_PROBES = {};",
           'export function defineDefaultSandboxProvider() { return { name: "default", environment }; }',
           "",
         ].join("\n");

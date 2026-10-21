@@ -17,12 +17,10 @@ async function run(
   command: string,
   args: string[],
   cwd: string,
-  env?: NodeJS.ProcessEnv,
 ): Promise<{ stderr: string; stdout: string }> {
   try {
     return await runFile(command, args, {
       cwd,
-      env,
       maxBuffer: 10 * 1024 * 1024,
       shell: process.platform === "win32",
     });
@@ -172,7 +170,6 @@ describe("packed package consumption", () => {
         connector: "github/selfmod-acme-agent",
         directory: ".",
         repository: "github.com/acme/agent",
-        vercelBackend: true,
       }),
     );
 
@@ -218,15 +215,8 @@ const slugs = compiled.subagents[0].agent.dynamicTools.map((tool) => tool.slug);
 assert.ok(slugs.includes("publish") && slugs.includes("registry_add"));
 `,
     );
-    // Deployed self-modification compiles only where Vercel Sandbox is available.
-    const vercelEnv = { ...process.env, VERCEL: "1" };
-    await run("node", ["verify-remote-extension.mjs"], appRoot, vercelEnv);
-    const build = await run(
-      "pnpm",
-      ["exec", "eve", "build", "--skip-sandbox-prewarm"],
-      appRoot,
-      vercelEnv,
-    );
+    await run("node", ["verify-remote-extension.mjs"], appRoot);
+    const build = await run("pnpm", ["exec", "eve", "build", "--skip-sandbox-prewarm"], appRoot);
     const output = `${build.stdout}\n${build.stderr}`;
     if (output.includes("Could not resolve '#shared/")) {
       throw new Error(

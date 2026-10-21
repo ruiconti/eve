@@ -103,7 +103,6 @@ describe("prewarmAppSandboxes", () => {
   });
 
   it("explains that docker is unavailable during Vercel prewarm", async () => {
-    const providerName = "docker";
     vi.stubEnv("VERCEL", "1");
 
     const appRoot = process.cwd();
@@ -117,13 +116,13 @@ describe("prewarmAppSandboxes", () => {
         dispatch: async () => {
           throw cause;
         },
-        loadAgentGraph: async () => createGraph({ providerName }),
+        loadAgentGraph: async () => createGraph({ providerName: "docker" }),
         log,
       }),
     ).rejects.toMatchObject({
       cause,
       message: expect.stringContaining(
-        `The ${providerName} sandbox provider is not available when deploying on Vercel.`,
+        "The docker sandbox provider is not available when deploying on Vercel.",
       ),
     });
 
@@ -131,7 +130,7 @@ describe("prewarmAppSandboxes", () => {
     expect(messages).toEqual([
       "eve: initializing 1 sandbox template...",
       expect.stringContaining(
-        `The ${providerName} sandbox provider is not available when deploying on Vercel.`,
+        "The docker sandbox provider is not available when deploying on Vercel.",
       ),
     ]);
     expect(messages[1]).toContain("Use DefaultSandbox.environment()");

@@ -21,9 +21,9 @@ import {
 
 // just-bash is an optional peer dependency (the opt-in local sandbox
 // engine) loaded lazily from the application's install; it additionally
-// exposes native optional codecs for xz/zstd support. All of these must stay external so workflow step
-// bundles neither fail resolving an absent optional install nor try to
-// inline platform-specific `.node` artifacts.
+// exposes native optional codecs for xz/zstd support. All of these must
+// stay external so workflow step bundles neither fail resolving an absent
+// optional install nor try to inline platform-specific `.node` artifacts.
 export const WORKFLOW_STEP_EXTERNAL_PACKAGES = [
   "@mongodb-js/zstd",
   "just-bash",

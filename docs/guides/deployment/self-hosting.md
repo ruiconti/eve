@@ -53,6 +53,8 @@ The default sandbox environment selects Docker when a Docker daemon is reachable
 
 Don’t select `VercelSandbox.environment()` unless the self-hosted process should create hosted Vercel sandboxes. See [Sandbox](../../sandbox) for provider configuration and selection order.
 
+Self-hosted deployments don’t support deployed self-modification. The [`eve/self-modification/remote`](../self-modification#propose-changes-from-a-deployed-agent) subagent requires Vercel Sandbox for runtime credential transforms and fails when it opens its sandbox outside Vercel, so don’t mount it in a self-hosted agent.
+
 ## Configure proxy routes
 
 Forward both runtime route prefixes through your reverse proxy or ingress:

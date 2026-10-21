@@ -1,5 +1,6 @@
 /**
- * Facade over every local sandbox provider (Docker, just-bash) plus their availability probes and cache pruning.
+ * Facade over every local sandbox provider (Docker, just-bash) plus their
+ * availability probes and cache pruning.
  *
  * This module is the single import path for local-engine functionality
  * from the public surface, so the hosted (Vercel) server bundle can
@@ -30,8 +31,9 @@ export { stopDevelopmentSandboxResources } from "#execution/sandbox/development-
 /**
  * Removes stale local sandbox template state for one application
  * across every local engine: just-bash template directories and Docker
- * template images (tracked through per-app marker files). Docker pruning silently skips when
- * no Docker runtime is reachable so docker-less setups stay quiet.
+ * template images (tracked through per-app marker files). Docker pruning
+ * silently skips when no Docker runtime is reachable so docker-less setups
+ * stay quiet.
  */
 export async function pruneLocalSandboxTemplates(input: {
   readonly appRoot: string;

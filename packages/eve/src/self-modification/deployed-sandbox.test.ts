@@ -1,10 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DeployedSelfModificationConfig } from "./remote/config.js";
 import {
-  defineDeployedSelfModificationSandbox,
-  selectDeployedSelfModificationEnvironment,
-} from "./deployed-sandbox.js";
+  getBoundSandboxEnvironment,
+  getSandboxEnvironmentRuntime,
+  type SandboxSelectorContext,
+} from "#shared/sandbox-environment.js";
+import {
+  createSandboxProviderResources,
+  type SandboxProviderPrepareContext,
+} from "#shared/sandbox-provider.js";
+
+import type { DeployedSelfModificationConfig } from "./remote/config.js";
+import { defineDeployedSelfModificationSandbox } from "./deployed-sandbox.js";
 
 const connectConfig: DeployedSelfModificationConfig = {
   authorize: () => true,
@@ -16,22 +23,39 @@ const connectConfig: DeployedSelfModificationConfig = {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("deployed self-modification sandbox", () => {
-  it("selects Vercel Sandbox on Vercel", () => {
-    expect(
-      selectDeployedSelfModificationEnvironment({ isDeployedOnVercel: () => true }).provider,
-    ).toBe("vercel");
+  it("builds off Vercel without probing the host or preparing a snapshot", async () => {
+    vi.stubEnv("EVE_DEV", "0");
+    const isDeployedOnVercel = vi.fn(() => false);
+
+    const environment = getBoundSandboxEnvironment(
+      defineDeployedSelfModificationSandbox(connectConfig, isDeployedOnVercel),
+    );
+
+    expect(environment?.provider).toBe("vercel");
+    const prepareContext = {
+      resources: createSandboxProviderResources({}),
+    } as SandboxProviderPrepareContext;
+    await expect(
+      getSandboxEnvironmentRuntime(environment!).implementation.prepare(prepareContext),
+    ).resolves.toEqual({});
+    expect(isDeployedOnVercel).not.toHaveBeenCalled();
   });
 
-  it("requires Vercel Sandbox outside Vercel", () => {
-    expect(() =>
-      selectDeployedSelfModificationEnvironment({ isDeployedOnVercel: () => false }),
-    ).toThrow("Deployed self-modification requires Vercel Sandbox");
+  it("requires Vercel Sandbox when a deployed child opens its sandbox off Vercel", async () => {
+    vi.stubEnv("EVE_DEV", "0");
+    const selector = defineDeployedSelfModificationSandbox(connectConfig, () => false);
+
+    await expect(
+      selector({ session: { id: "child", parent: {} } } as SandboxSelectorContext),
+    ).rejects.toThrow("Deployed self-modification requires Vercel Sandbox");
   });
 
-  it("does not probe deployed providers during eve dev", () => {
+  it("does not probe the host during eve dev", () => {
     vi.stubEnv("EVE_DEV", "1");
-    const probes = { isDeployedOnVercel: vi.fn() };
-    expect(defineDeployedSelfModificationSandbox(connectConfig, probes)).toBeTypeOf("function");
-    expect(probes.isDeployedOnVercel).not.toHaveBeenCalled();
+    const isDeployedOnVercel = vi.fn(() => false);
+    expect(defineDeployedSelfModificationSandbox(connectConfig, isDeployedOnVercel)).toBeTypeOf(
+      "function",
+    );
+    expect(isDeployedOnVercel).not.toHaveBeenCalled();
   });
 });

@@ -20,7 +20,7 @@ export interface DefaultSandboxProbes {
   readonly isDockerAvailable: () => boolean;
 }
 
-export const SANDBOX_PROVIDER_PROBES: DefaultSandboxProbes = {
+const SANDBOX_PROVIDER_PROBES: DefaultSandboxProbes = {
   isDeployedOnVercel: () => Boolean(process.env.VERCEL),
   isDockerAvailable: () => isLinuxDockerDaemonAvailableSync(),
 };
