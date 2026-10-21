@@ -3,6 +3,7 @@ import type { JsonObject, JsonValue } from "#shared/json.js";
 import { toError, walkCauseChain } from "#shared/errors.js";
 import { summarizeKnownError } from "#harness/semantic-errors/index.js";
 import { isTurnCancellation } from "#harness/turn-cancellation.js";
+import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 
 const RESPONSE_BODY_SNIPPET_LIMIT = 1_000;
 const API_ERROR_SUMMARY_LIMIT = 800;
@@ -295,6 +296,11 @@ export function isNoOutputGeneratedError(error: unknown): boolean {
 export function classifyModelCallError(error: unknown): "retry" | "recoverable" | "terminal" {
   if (isTurnCancellation(error)) {
     return "terminal";
+  }
+
+  // Never automatically replay a stream whose tool side effects may have run.
+  if (error instanceof IncompleteModelStreamError) {
+    return "recoverable";
   }
 
   // Not "retry": the empty response already resolved the step hooks'

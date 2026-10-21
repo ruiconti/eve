@@ -10,7 +10,7 @@ import type {
 type ToolResponsePart = Extract<ModelMessage, { role: "tool" }>["content"][number];
 type InlineToolResultPart = Extract<ToolResponsePart, { type: "tool-result" }>;
 
-import type { AssistantStepFinishReason } from "#protocol/message.js";
+import type { AssistantStepFinishReason, UnstampedMessageStreamEvent } from "#protocol/message.js";
 import {
   createActionsRequestedEvent,
   createActionInputAppendedEvent,
@@ -65,6 +65,8 @@ interface EmittedStreamContent {
 
 interface StreamActionEmissionOptions {
   readonly excludedActionToolNames: ReadonlySet<string>;
+  /** Defer deliverable completions until the provider, not just the SDK step, finishes. */
+  readonly isModelCallComplete?: () => boolean;
   /**
    * A child's or schedule's turn is held while its tasks work, so a text step
    * can't end it: the step reports `"tool-calls"` and channels don't post it
@@ -90,8 +92,22 @@ export async function emitStreamContent(
   options?: StreamActionEmissionOptions,
 ): Promise<EmittedStreamContent> {
   const orderedEmitter = createOrderedStreamEmitter(emitFn);
+  const deferred: UnstampedMessageStreamEvent[] = [];
+  const emitContent: HarnessEmitFn = async (event) => {
+    // A completion closes the client's current segment. Nothing after it may
+    // overtake that boundary, including deltas for a different segment.
+    if (
+      deferred.length > 0 ||
+      (options?.isModelCallComplete?.() === false &&
+        (event.type === "message.completed" || event.type === "reasoning.completed"))
+    ) {
+      deferred.push(event);
+      return;
+    }
+    await orderedEmitter.emit(event);
+  };
   const providerActionBatch = createProviderStreamActionBatch({
-    emitFn: orderedEmitter.emit,
+    emitFn: emitContent,
     onActionsEmitted: (actions) => {
       for (const { request, toolName } of actions) {
         options?.unsettledActionToolNames?.set(request.action.callId, toolName);
@@ -99,19 +115,39 @@ export async function emitStreamContent(
     },
     state,
   });
+  let streamConsumed = false;
   try {
-    return await consumeStreamContent(
-      orderedEmitter.emit,
+    const result = await consumeStreamContent(
+      emitContent,
       state,
       interruptStreamOnFailure(fullStream, orderedEmitter.failureSignal),
       providerActionBatch,
       options,
     );
+    streamConsumed = true;
+    return result;
   } finally {
     try {
-      await providerActionBatch.cancel();
+      const completed = streamConsumed && options?.isModelCallComplete?.() === true;
+      for (const event of deferred) {
+        // On failure discard unconfirmed content, but do not hide tool work
+        // that already happened. Preserve the relative order of those events.
+        if (
+          completed ||
+          event.type === "actions.requested" ||
+          event.type === "action.input.appended" ||
+          event.type === "action.result" ||
+          event.type === "action.partial"
+        ) {
+          await orderedEmitter.emit(event);
+        }
+      }
     } finally {
-      await orderedEmitter.closeAndDrain();
+      try {
+        await providerActionBatch.cancel();
+      } finally {
+        await orderedEmitter.closeAndDrain();
+      }
     }
   }
 }

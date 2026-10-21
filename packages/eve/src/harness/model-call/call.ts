@@ -17,6 +17,10 @@ import {
   moveToolResultFilesToUserMessages,
 } from "#harness/attachment-staging.js";
 import { emitStreamContent } from "#harness/emission.js";
+import {
+  completedToolMessages,
+  IncompleteModelStreamError,
+} from "#harness/incomplete-model-stream.js";
 import { toEntryStep, toEntryStream, toEntryTelemetry } from "#harness/execute-call.js";
 import { REPLY_TOOL_NAME } from "#protocol/reply-tool.js";
 import type { GenerationSteering } from "#harness/generation-steering.js";
@@ -350,6 +354,7 @@ export class ModelCaller {
       session: step.session,
       startStep: options.suppressStepStartedEmission === true ? undefined : this.input.startStep,
     });
+    let modelCallCompleted = false;
     const settings = {
       headers: this.attributionHeaders,
       instructions,
@@ -359,6 +364,7 @@ export class ModelCaller {
         this.step.instrumentation?.gatewayTraceContextHeaders,
       ),
       onLanguageModelCallEnd: (event: LanguageModelCallEndEvent) => {
+        modelCallCompleted = true;
         if (generation.interrupted) return;
         this.interruptedUsage = extractTokenUsageDelta({
           costUsd: extractGatewayCostUsd(event.providerMetadata),
@@ -398,6 +404,7 @@ export class ModelCaller {
         callMessages,
         hooks.stepResult,
         unsettledActionToolNames,
+        () => modelCallCompleted,
       );
       await attempt?.complete();
       return result;
@@ -420,6 +427,7 @@ export class ModelCaller {
     messages: ModelMessage[],
     stepResultPromise: Promise<HarnessStepResult>,
     unsettledActionToolNames: Map<string, string>,
+    isModelCallComplete: () => boolean,
   ): Promise<HarnessStepResult> {
     const { step } = this;
     const { catalog, generation } = this.input;
@@ -441,6 +449,7 @@ export class ModelCaller {
       {
         excludedActionToolNames,
         hidesHeldText: this.input.hidesHeldText && workingTaskIds(step.session).length > 0,
+        isModelCallComplete,
         tools: catalog,
         unsettledActionToolNames,
       },
@@ -451,6 +460,26 @@ export class ModelCaller {
       ...(await Promise.all([stepResultPromise, streamResult.responseMessages])),
       catalog.resolve,
     );
+    // The SDK synthesizes a step at EOF, even without a provider finish chunk.
+    // A real provider finish with reason "other" is still complete.
+    if (!isModelCallComplete()) {
+      const completedMessages = completedToolMessages(
+        appendMissingToolResultMessages({
+          append: trailingInlineToolResultParts,
+          responseMessages: accumulatedResponseMessages,
+        }),
+      );
+      // Human-input resolutions already committed before this call. Only add
+      // newly completed tool work; never commit partial text or unanswered calls.
+      if (completedMessages.length > 0) {
+        step.session = {
+          ...step.session,
+          history: [...this.request.history, ...completedMessages],
+        };
+        step.ctx?.set(HistoryStateKey, this.request.historyState);
+      }
+      throw new IncompleteModelStreamError();
+    }
     assertUsableResponse(stepResult, accumulatedResponseMessages, {
       allowEmptyStop: !step.hasDelegatedCaller,
       hasInlineResults:
