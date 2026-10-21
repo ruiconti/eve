@@ -20,7 +20,7 @@ function createEmitStub(): HarnessEmitFn {
 
 describe("emitStreamContent provider completion", () => {
   it.each(["error", "abort"] as const)(
-    "does not hide a later %s behind an incomplete event or deliver deferred completions",
+    "does not hide a later %s behind an incomplete event or deliver a final reply",
     async (type) => {
       const emit = createEmitStub();
       const original = new Error("upstream failed");
@@ -35,6 +35,8 @@ describe("emitStreamContent provider completion", () => {
       else await expect(run).rejects.toMatchObject({ name: "AbortError" });
       expect(vi.mocked(emit).mock.calls.map(([event]) => event.type)).toEqual([
         "reasoning.appended",
+        "reasoning.completed",
+        "message.appended",
       ]);
     },
   );
@@ -98,11 +100,18 @@ describe("emitStreamContent provider completion", () => {
         ]),
       });
       await tailReached;
-      await vi.waitFor(() => expect(vi.mocked(emit).mock.calls).toHaveLength(1));
-      expect(vi.mocked(emit).mock.calls[0]?.[0]).toMatchObject({
-        type: "message.appended",
-        data: { messageDelta: "A" },
-      });
+      await vi.waitFor(() =>
+        expect(vi.mocked(emit).mock.calls.map(([event]) => event)).toContainEqual(
+          expect.objectContaining({
+            type: "message.appended",
+            data: expect.objectContaining({ messageDelta: "C" }),
+          }),
+        ),
+      );
+      // Both tool boundaries and every text segment reach the client before EOF.
+      const beforeFinish = vi.mocked(emit).mock.calls.map(([event]) => event);
+      expect(beforeFinish.filter((event) => event.type === "action.result")).toHaveLength(2);
+      expect(beforeFinish.filter((event) => event.type === "message.completed")).toHaveLength(2);
       release();
       expect((await run).outcome.status).toBe(sawFinish ? "complete" : "incomplete");
       const events = vi.mocked(emit).mock.calls.map(([event]) => event);
@@ -125,17 +134,15 @@ describe("emitStreamContent provider completion", () => {
               ? [part.toolCallId]
               : [],
         );
-      expect(projection).toEqual(
-        sawFinish ? ["A", "tool1", "B", "tool2", "C"] : ["A", "tool1", "tool2"],
-      );
+      expect(projection).toEqual(["A", "tool1", "B", "tool2", "C"]);
       expect(events.filter((event) => event.type === "message.completed")).toHaveLength(
-        sawFinish ? 3 : 0,
+        sawFinish ? 3 : 2,
       );
     },
   );
 
   it.each([false, true])(
-    "streams initial deltas but holds the tail at the first completion until provider finish (%s)",
+    "streams reasoning and answer deltas without waiting for provider finish (%s)",
     async (sawFinish) => {
       let release!: () => void;
       const pause = new Promise<void>((resolve) => {
@@ -156,11 +163,13 @@ describe("emitStreamContent provider completion", () => {
       });
       await vi.waitFor(() => {
         expect(
-          vi.mocked(emit).mock.calls.some(([event]) => event.type === "reasoning.appended"),
+          vi.mocked(emit).mock.calls.some(([event]) => event.type === "message.appended"),
         ).toBe(true);
       });
       expect(vi.mocked(emit).mock.calls.map(([event]) => event.type)).toEqual([
         "reasoning.appended",
+        "reasoning.completed",
+        "message.appended",
       ]);
       release();
       expect((await run).outcome.status).toBe(sawFinish ? "complete" : "incomplete");
@@ -168,7 +177,9 @@ describe("emitStreamContent provider completion", () => {
         .mocked(emit)
         .mock.calls.map(([event]) => event.type)
         .filter((type) => type === "message.completed" || type === "reasoning.completed");
-      expect(completions).toEqual(sawFinish ? ["reasoning.completed", "message.completed"] : []);
+      expect(completions).toEqual(
+        sawFinish ? ["reasoning.completed", "message.completed"] : ["reasoning.completed"],
+      );
     },
   );
 });

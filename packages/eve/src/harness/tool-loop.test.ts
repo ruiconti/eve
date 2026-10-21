@@ -1017,7 +1017,11 @@ describe("createToolLoopHarness", () => {
       data: { code: "MODEL_STREAM_INCOMPLETE" },
     });
     expect(
-      events.some((event) => event.type === "message.completed" || event.type === "step.completed"),
+      events.some(
+        (event) =>
+          event.type === "step.completed" ||
+          (event.type === "message.completed" && event.data.finishReason !== "tool-calls"),
+      ),
     ).toBe(false);
     expect(events.find((event) => event.type === "action.result")).toMatchObject({
       data: { result: { callId: "completed" } },

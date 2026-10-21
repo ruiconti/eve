@@ -10,7 +10,7 @@ import type {
 type ToolResponsePart = Extract<ModelMessage, { role: "tool" }>["content"][number];
 type InlineToolResultPart = Extract<ToolResponsePart, { type: "tool-result" }>;
 
-import type { AssistantStepFinishReason, UnstampedMessageStreamEvent } from "#protocol/message.js";
+import type { AssistantStepFinishReason } from "#protocol/message.js";
 import {
   createActionsRequestedEvent,
   createActionInputAppendedEvent,
@@ -94,22 +94,8 @@ export async function emitStreamContent(
   options?: StreamActionEmissionOptions,
 ): Promise<EmittedStreamContent> {
   const orderedEmitter = createOrderedStreamEmitter(emitFn);
-  const deferred: UnstampedMessageStreamEvent[] = [];
-  const emitContent: HarnessEmitFn = async (event) => {
-    // A completion closes the client's current segment. Nothing after it may
-    // overtake that boundary, including deltas for a different segment.
-    if (
-      deferred.length > 0 ||
-      event.type === "message.completed" ||
-      event.type === "reasoning.completed"
-    ) {
-      deferred.push(event);
-      return;
-    }
-    await orderedEmitter.emit(event);
-  };
   const providerActionBatch = createProviderStreamActionBatch({
-    emitFn: emitContent,
+    emitFn: orderedEmitter.emit,
     onActionsEmitted: (actions) => {
       for (const { request, toolName } of actions) {
         options?.unsettledActionToolNames?.set(request.action.callId, toolName);
@@ -117,38 +103,19 @@ export async function emitStreamContent(
     },
     state,
   });
-  let completed = false;
   try {
-    const result = await consumeStreamContent(
-      emitContent,
+    return await consumeStreamContent(
+      orderedEmitter.emit,
       state,
       interruptStreamOnFailure(fullStream, orderedEmitter.failureSignal),
       providerActionBatch,
       options,
     );
-    completed = result.outcome.status === "complete";
-    return result;
   } finally {
     try {
-      for (const event of deferred) {
-        // On failure discard unconfirmed content, but do not hide tool work
-        // that already happened. Preserve the relative order of those events.
-        if (
-          completed ||
-          event.type === "actions.requested" ||
-          event.type === "action.input.appended" ||
-          event.type === "action.result" ||
-          event.type === "action.partial"
-        ) {
-          await orderedEmitter.emit(event);
-        }
-      }
+      await providerActionBatch.cancel();
     } finally {
-      try {
-        await providerActionBatch.cancel();
-      } finally {
-        await orderedEmitter.closeAndDrain();
-      }
+      await orderedEmitter.closeAndDrain();
     }
   }
 }

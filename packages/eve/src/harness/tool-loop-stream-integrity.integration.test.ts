@@ -99,7 +99,7 @@ function expectIncomplete(events: UnstampedMessageStreamEvent[]) {
   expect(events.some((event) => event.type === "step.completed")).toBe(false);
   expect(
     events.filter(
-      (event) => event.type === "message.completed" || event.type === "reasoning.completed",
+      (event) => event.type === "message.completed" && event.data.finishReason !== "tool-calls",
     ),
   ).toEqual([]);
 }
