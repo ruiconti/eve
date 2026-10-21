@@ -42,7 +42,6 @@ import {
 import { projectResultPresentation, projectDeltaPresentation } from "#harness/tool-presentation.js";
 import { createProviderStreamActionBatch } from "#harness/stream-actions.js";
 import { normalizeModelStreamError } from "#harness/model-call/errors.js";
-import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 import { createOrderedStreamEmitter } from "#harness/ordered-stream-emitter.js";
 import { interruptStreamOnFailure } from "#harness/interruptible-stream.js";
 import { isInlineAuthorizationToolResult } from "#harness/inline-tool-authorization.js";
@@ -57,9 +56,6 @@ import { normalizeAssistantStepFinishReason } from "#harness/finish-reason.js";
  * authorization results also route back to the park detector.
  */
 interface EmittedStreamContent {
-  readonly outcome:
-    | { readonly status: "complete" }
-    | { readonly status: "incomplete"; readonly error: IncompleteModelStreamError };
   readonly emittedActionCallIds: ReadonlySet<string>;
   readonly handledInlineToolResultCallIds: ReadonlySet<string>;
   readonly invalidInputToolCallIds: ReadonlySet<string>;
@@ -323,9 +319,7 @@ async function consumeStreamContent(
   };
 
   for await (const part of fullStream) {
-    // The SDK may settle in-flight tools after the provider's incomplete event.
-    // Keep consuming their outcomes, but never let a synthesized finish erase it.
-    if (streamError !== undefined && !(streamError instanceof IncompleteModelStreamError)) {
+    if (streamError !== undefined) {
       continue;
     }
 
@@ -490,16 +484,6 @@ async function consumeStreamContent(
 
   await providerActionBatch.flush();
 
-  const content = {
-    emittedActionCallIds,
-    handledInlineToolResultCallIds,
-    invalidInputToolCallIds,
-    inlineAuthorizationResults,
-    trailingInlineToolResultParts,
-  };
-  if (streamError instanceof IncompleteModelStreamError) {
-    return { ...content, outcome: { status: "incomplete", error: streamError } };
-  }
   if (streamError !== undefined) {
     throw streamError;
   }
@@ -527,5 +511,11 @@ async function consumeStreamContent(
     );
   }
 
-  return { ...content, outcome: { status: "complete" } };
+  return {
+    emittedActionCallIds,
+    handledInlineToolResultCallIds,
+    invalidInputToolCallIds,
+    inlineAuthorizationResults,
+    trailingInlineToolResultParts,
+  };
 }

@@ -13,7 +13,6 @@ import type { StepResult } from "#harness/types.js";
 import { extractWorkflowStreamWriteErrorDetails } from "#harness/workflow-stream-error.js";
 import { fail } from "#harness/session-machine/transitions.js";
 import { summarizeKnownError } from "#harness/semantic-errors/index.js";
-import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 
 const log = createLogger("harness.tool-loop");
 /**
@@ -189,14 +188,7 @@ export async function reportModelCallFailure(step: Step, error: unknown): Promis
     logFields,
   );
   await step.apply(
-    fail(step.view(), {
-      code:
-        error instanceof IncompleteModelStreamError
-          ? "MODEL_STREAM_INCOMPLETE"
-          : "MODEL_CALL_FAILED",
-      details,
-      message: errorMessage,
-    }),
+    fail(step.view(), { code: "MODEL_CALL_FAILED", details, message: errorMessage }),
   );
   step.session = { ...step.session, outputSchema: undefined };
   return {

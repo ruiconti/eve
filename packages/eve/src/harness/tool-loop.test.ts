@@ -4,7 +4,6 @@ import {
   type FilePart,
   jsonSchema,
   type LanguageModel,
-  type LanguageModelCallEndEvent,
   type ModelMessage,
   streamText,
   ToolLoopAgent,
@@ -75,7 +74,6 @@ import {
 } from "#internal/testing/session-machine.js";
 import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { appendMissingToolResultMessages } from "#harness/model-call/response.js";
-import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import { createTask, writeTaskTable } from "#execution/tasks/table.js";
 import { SessionLimitDeclinedError, TurnCancelledError } from "#harness/turn-cancellation.js";
@@ -102,11 +100,6 @@ import { countRunUsage } from "#execution/agent-sessions/usage.js";
 // The harness runs outside a workflow body here, where run attributes cannot
 // be written; the attribute contract is covered by emit.test.ts.
 vi.mock("#runtime/attributes/emit.js", () => ({ setEveAttributes: vi.fn(async () => {}) }));
-
-// This suite supplies public SDK events; native provider streams use the real-SDK integration suite.
-vi.mock("#harness/model-call/stream-integrity.js", () => ({
-  withModelStreamIntegrity: (model: LanguageModel) => model,
-}));
 
 vi.mock("ai", async (importOriginal) => ({
   ...(await importOriginal<typeof import("ai")>()),
@@ -478,10 +471,7 @@ function getPrepareStep<TMessages, TResult>(value: unknown): PrepareStepProbe<TM
   return value as PrepareStepProbe<TMessages, TResult>;
 }
 
-function createMockStreamResult(
-  result: Record<string, unknown>,
-  settings: MockAgentSettings,
-): {
+function createMockStreamResult(result: Record<string, unknown>): {
   fullStream: AsyncIterable<Record<string, unknown>>;
   responseMessages: Promise<Record<string, unknown>[]>;
   steps: Promise<Record<string, unknown>[]>;
@@ -491,18 +481,10 @@ function createMockStreamResult(
     : null;
 
   return {
-    fullStream: (async function* () {
-      yield* fullStreamParts === null
+    fullStream:
+      fullStreamParts === null
         ? createMockFullStream(result)
-        : createExplicitMockFullStream(fullStreamParts);
-      if (!fullStreamParts?.some((part) => part.type === "error")) {
-        await settings.onLanguageModelCallEnd?.({
-          content: result.content ?? result.toolCalls ?? [],
-          finishReason: result.finishReason,
-          usage: result.usage ?? {},
-        } as LanguageModelCallEndEvent);
-      }
-    })(),
+        : createExplicitMockFullStream(fullStreamParts),
     responseMessages: Promise.resolve(getMockResponseMessages(result)),
     steps: Promise.resolve([result]),
   };
@@ -620,7 +602,6 @@ async function* createMockFullStream(
 }
 
 type MockAgentSettings = {
-  onLanguageModelCallEnd?: (event: LanguageModelCallEndEvent) => Promise<void> | void;
   onStepStart?: (input: unknown) => Promise<void> | void;
   onStepEnd?: (step: unknown) => Promise<void> | void;
   output?: unknown;
@@ -667,7 +648,7 @@ function setupMockAgent(result: Record<string, unknown>): void {
 
     this.stream = vi.fn().mockImplementation(async (options: { messages: unknown[] }) => {
       await invokeMockStepStart(settings, options);
-      const mockResult = createMockStreamResult(result, settings);
+      const mockResult = createMockStreamResult(result);
       // Schedule onStepEnd to fire after a microtask so the stream
       // can start being consumed first by emitStreamContent.
       if (onStepEnd) {
@@ -693,7 +674,7 @@ function setupMockAgentSequence(results: readonly Record<string, unknown>[]): vo
     const { onStepEnd } = settings;
     this.stream = vi.fn().mockImplementation(async (options: { messages: unknown[] }) => {
       await invokeMockStepStart(settings, options);
-      const mockResult = createMockStreamResult(result, settings);
+      const mockResult = createMockStreamResult(result);
       if (onStepEnd) void Promise.resolve().then(() => onStepEnd(result));
       return mockResult;
     });
@@ -964,70 +945,6 @@ function lastSessionEvent<T extends "session.waiting" | "session.failed">(
 }
 
 describe("createToolLoopHarness", () => {
-  it("retains completed tool work but not partial text or unanswered calls after silent EOF", async () => {
-    const call = { input: {}, toolCallId: "completed", toolName: "add", type: "tool-call" };
-    const completed = {
-      output: { type: "json", value: { saved: true } },
-      toolCallId: call.toolCallId,
-      toolName: call.toolName,
-      type: "tool-result",
-    };
-    setupMockAgent({
-      finishReason: "other",
-      fullStreamParts: [
-        { id: "text", type: "text-delta", text: "Partial answer" },
-        call,
-        { ...call, toolCallId: "unanswered" },
-        { type: "error", error: new IncompleteModelStreamError() },
-        // In-flight tool results can settle after the provider ends.
-        { ...completed, input: {}, output: { saved: true } },
-        { type: "finish-step", finishReason: "error" },
-      ],
-      response: {
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              { type: "text", text: "Partial answer" },
-              call,
-              { ...call, toolCallId: "unanswered" },
-            ],
-          },
-          { role: "tool", content: [completed] },
-        ],
-      },
-      text: "Partial answer",
-      toolCalls: [call, { ...call, toolCallId: "unanswered" }],
-      toolResults: [completed],
-    });
-    const { emit, events } = createEventCollector();
-    const result = await createToolLoopHarness(createTestConfig(emit))(createTestSession(), {
-      message: "Do work",
-    });
-    expect(ToolLoopAgent).toHaveBeenCalledTimes(1);
-    expect(result.next).toBeNull();
-    expect(result.settledTurn?.isError).toBe(true);
-    expect(result.session.history.slice(-2)).toEqual([
-      { role: "assistant", content: [call] },
-      { role: "tool", content: [completed] },
-    ]);
-    expect(JSON.stringify(result.session.history)).not.toContain("Partial answer");
-    expect(JSON.stringify(result.session.history)).not.toContain("unanswered");
-    expect(events.find((event) => event.type === "step.failed")).toMatchObject({
-      data: { code: "MODEL_STREAM_INCOMPLETE" },
-    });
-    expect(
-      events.some(
-        (event) =>
-          event.type === "step.completed" ||
-          (event.type === "message.completed" && event.data.finishReason !== "tool-calls"),
-      ),
-    ).toBe(false);
-    expect(events.find((event) => event.type === "action.result")).toMatchObject({
-      data: { result: { callId: "completed" } },
-    });
-  });
-
   it("reports the session's running usage, delegated spend included, when the turn ends", async () => {
     setupMockAgent({
       finishReason: "stop",
@@ -4487,7 +4404,7 @@ describe("createToolLoopHarness", () => {
         if (onStepEnd) {
           void Promise.resolve().then(() => onStepEnd(success));
         }
-        return createMockStreamResult(success, settings);
+        return createMockStreamResult(success);
       });
       return this;
     } as MockAgentConstructor);
@@ -5083,7 +5000,7 @@ describe("createToolLoopHarness", () => {
                 context: undefined,
               });
             }
-            const mockResult = createMockStreamResult(input.successResult, settings);
+            const mockResult = createMockStreamResult(input.successResult);
             if (onStepEnd) {
               void Promise.resolve().then(() => onStepEnd(input.successResult));
             }
@@ -5469,7 +5386,7 @@ describe("createToolLoopHarness", () => {
         this.stream = vi.fn().mockImplementation(async () => {
           if (tools.web_search !== undefined) throw rejection;
           void Promise.resolve().then(() => settings.onStepEnd?.(successResult));
-          return createMockStreamResult(successResult, settings);
+          return createMockStreamResult(successResult);
         });
         return this as unknown as ToolLoopAgent;
       } as unknown as MockAgentConstructor);
@@ -8097,7 +8014,7 @@ describe("createToolLoopHarness", () => {
           toolResults: [],
         };
         if (onStepEnd) await onStepEnd(result);
-        return createMockStreamResult(result, settings);
+        return createMockStreamResult(result);
       });
       return this as unknown as ToolLoopAgent;
     } as unknown as ConstructorParameters<typeof ToolLoopAgent> extends [infer S]

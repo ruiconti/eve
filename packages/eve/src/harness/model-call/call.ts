@@ -17,9 +17,6 @@ import {
   moveToolResultFilesToUserMessages,
 } from "#harness/attachment-staging.js";
 import { emitStreamContent } from "#harness/emission.js";
-import { completedToolMessages } from "#harness/incomplete-model-stream.js";
-import { commitModelHistory, prepareModelHistory } from "#harness/model-history.js";
-import { withModelStreamIntegrity } from "#harness/model-call/stream-integrity.js";
 import { toEntryStep, toEntryStream, toEntryTelemetry } from "#harness/execute-call.js";
 import { REPLY_TOOL_NAME } from "#protocol/reply-tool.js";
 import type { GenerationSteering } from "#harness/generation-steering.js";
@@ -356,12 +353,10 @@ export class ModelCaller {
     const settings = {
       headers: this.attributionHeaders,
       instructions,
-      model: withModelStreamIntegrity(
-        withGatewayTraceContext(
-          model,
-          this.profile,
-          this.step.instrumentation?.gatewayTraceContextHeaders,
-        ),
+      model: withGatewayTraceContext(
+        model,
+        this.profile,
+        this.step.instrumentation?.gatewayTraceContextHeaders,
       ),
       onLanguageModelCallEnd: (event: LanguageModelCallEndEvent) => {
         if (generation.interrupted) return;
@@ -436,7 +431,6 @@ export class ModelCaller {
       invalidInputToolCallIds,
       inlineAuthorizationResults,
       trailingInlineToolResultParts,
-      outcome,
     } = await emitStreamContent(
       step.publish,
       step.position(),
@@ -457,43 +451,6 @@ export class ModelCaller {
       ...(await Promise.all([stepResultPromise, streamResult.responseMessages])),
       catalog.resolve,
     );
-    if (outcome.status === "incomplete") {
-      const completedMessages = completedToolMessages(
-        appendMissingToolResultMessages({
-          append: trailingInlineToolResultParts,
-          responseMessages: accumulatedResponseMessages,
-        }),
-      );
-      // Human-input resolutions already committed before this call. Only add
-      // newly completed tool work; never commit partial text or unanswered calls.
-      const historyErrors: unknown[] = [];
-      try {
-        if (completedMessages.length > 0) {
-          const prepared = await prepareModelHistory({
-            messages: completedMessages,
-            result: stepResult,
-            onMediaStagingError: (error) => {
-              historyErrors.push(error);
-            },
-          });
-          commitModelHistory(step, this.request.history, prepared.messages);
-          step.ctx?.set(HistoryStateKey, this.request.historyState);
-        }
-      } catch (error) {
-        // An unexpected preparation failure is not a safe media fallback. Surface
-        // it as the cause, but never let it turn known incomplete work into a retry.
-        historyErrors.push(error);
-        outcome.error.message =
-          "The model stream ended without a provider finish event and was not retried. Completed tool history could not be prepared.";
-      }
-      if (historyErrors.length > 0) {
-        outcome.error.cause =
-          historyErrors.length === 1
-            ? historyErrors[0]
-            : new AggregateError(historyErrors, "Completed tool history preparation failed");
-      }
-      throw outcome.error;
-    }
     assertUsableResponse(stepResult, accumulatedResponseMessages, {
       allowEmptyStop: !step.hasDelegatedCaller,
       hasInlineResults:

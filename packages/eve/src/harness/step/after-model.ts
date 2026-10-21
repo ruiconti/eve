@@ -1,4 +1,4 @@
-import { commitModelHistory, prepareModelHistory } from "#harness/model-history.js";
+import { stageToolResultMedia } from "#harness/attachment-staging.js";
 import type { ModelMessage, ToolSet, TypedToolCall, TypedToolError } from "ai";
 
 import type { CompactionConfig, StepResult } from "#harness/types.js";
@@ -43,12 +43,11 @@ import {
   isInvalidToolCall,
 } from "#harness/tool-call-input-errors.js";
 import { isWorkflowTool, workingTaskIds } from "#execution/tasks/model-step.js";
+import { normalizeProviderToolHistory } from "#harness/provider-tool-history.js";
 import { renderFinalOutputWhileWorkingError } from "#execution/tasks/render.js";
 import { resolveInlineAuthorizationInterrupt } from "#harness/inline-tool-authorization.js";
 import { setRequestEnvelopeTokens } from "#harness/request-envelope.js";
 import { createLogger } from "#internal/logging.js";
-
-export { withoutApprovalParts } from "#harness/model-history.js";
 
 const log = createLogger("harness.tool-loop");
 
@@ -93,10 +92,23 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
     responseMessages: result.response.messages,
   });
 
-  const { messages: responseMessages, outcomeEndsResponse } = await prepareModelHistory({
+  const providerExecutedOutcomeIds = new Set<string>();
+  for (const part of [...(result.content ?? []), ...(result.toolResults ?? [])]) {
+    if (
+      (part.type === "tool-result" || part.type === "tool-error") &&
+      part.providerExecuted === true
+    ) {
+      providerExecutedOutcomeIds.add(part.toolCallId);
+    }
+  }
+  const normalizedProviderHistory = normalizeProviderToolHistory({
     messages: rawResponseMessages,
-    result,
+    providerExecutedOutcomeIds,
   });
+  // eve runs approved calls itself, so the SDK's approval parts never reach history.
+  const responseMessages = await stageToolResultMedia(
+    withoutApprovalParts(normalizedProviderHistory.messages),
+  );
 
   step.session = setRequestEnvelopeTokens(
     {
@@ -178,7 +190,10 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
   // so the prompt prefix stays stable and the provider's prompt cache keeps
   // hitting across steps. Compaction is the sole mechanism that ever rewrites
   // history, and it runs before the model call (see `maybeCompact`).
-  commitModelHistory(step, promptMessages, responseMessages);
+  step.session = {
+    ...step.session,
+    history: validateHarnessModelMessages([...promptMessages, ...responseMessages]),
+  };
 
   // An `eve__reply` call is terminal even when the model emits it alongside
   // executing tools: continuing the loop would leave the no-execute call as a
@@ -200,7 +215,7 @@ export async function handleStepResult(step: Step, input: ModelResponse): Promis
   const continueLoop =
     (!calledFinalOutput || finalOutputRejected) &&
     ((responseTail.at(-1)?.role === "tool" && !endsTurn) ||
-      outcomeEndsResponse ||
+      normalizedProviderHistory.outcomeEndsResponse ||
       hasRunnableQueue(step.view()));
   if (continueLoop) return { next: step.runStep, session: step.session };
   // The turn rule: no turn ends while its tasks work. The session waits for
@@ -239,6 +254,18 @@ function answerCallsThatWontRun(
   return answers
     .filter((part) => !answered.has(part.toolCallId))
     .reduce<ModelMessage[]>((next, part) => withResult(next, part), [...messages]);
+}
+
+/** The SDK's approval parts: eve answers approvals itself, so history never holds them. */
+export function withoutApprovalParts(messages: readonly ModelMessage[]): ModelMessage[] {
+  return messages.flatMap((message): ModelMessage[] => {
+    if (message.role !== "assistant" && message.role !== "tool") return [message];
+    if (!Array.isArray(message.content)) return [message];
+    const content = message.content.filter(
+      (part) => part.type !== "tool-approval-request" && part.type !== "tool-approval-response",
+    );
+    return content.length === 0 ? [] : [{ ...message, content } as ModelMessage];
+  });
 }
 
 /**
