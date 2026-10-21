@@ -20,7 +20,6 @@ export interface InitialWorkflowEntryInput {
   readonly continuationConflictCommand?: Extract<SessionCommand, { readonly kind: "send" }>;
   readonly input: RunInput["input"];
   readonly kind: "initial";
-  readonly limits?: RunInput["limits"];
   readonly ownerDeploymentId: string;
   readonly retention?: AgentWorkflowRetentionDefinition;
   readonly sessionTimeoutMs?: number | false;
@@ -47,8 +46,6 @@ export type SessionHandoffStart =
        * successor parks until the next input arrives.
        */
       readonly delivery?: DeliverHookPayload;
-      /** Compaction does not extend the session's lifetime. */
-      readonly sessionTimeoutDeadline?: Date;
     };
 
 /** A successor owner started by a previous owner during a handoff. */

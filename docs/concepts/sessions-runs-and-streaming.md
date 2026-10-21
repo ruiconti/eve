@@ -21,13 +21,13 @@ whichever session currently owns a platform conversation, such as a Slack thread
 That identity stays behind the channel boundary and is never accepted or returned
 by the eve HTTP session API. See [Custom channels](../channels/custom#channel-operations-and-session-handles).
 
-Sessions last 30 days by default; configure `limits.sessionTimeoutMs` in
-`agent.ts`, or set it to `false` to disable the deadline. A successful deployment
-handoff or legacy-session import restarts the original configured duration.
-Ordinary messages, compaction handoffs, and process restarts keep the existing deadline. At expiration, eve
-lets an active turn settle, emits `session.completed`, and releases the
-session's continuation addresses so the next qualifying channel message starts fresh. Stored
-session data is not deleted. See [Agent config](../agent-config#runtime-limits).
+A session completes after 30 idle days by default; configure
+`limits.sessionTimeoutMs` in `agent.ts`, or set it to `false` to disable the
+timeout. The idle window restarts each time a turn settles, and a session never
+expires while a turn is open. At expiration, eve emits `session.completed` and
+releases the session's continuation addresses so the next qualifying channel
+message starts fresh. Stored session data is not deleted. See
+[Agent config](../agent-config#runtime-limits).
 
 React, Vue, and Svelte apps reach for [`useEveAgent()`](../guides/frontend/overview) instead of calling these routes by hand. Next.js and Nuxt apps can proxy them to the eve runtime from the same origin.
 

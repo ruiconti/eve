@@ -76,7 +76,10 @@ import {
   readDurableSession,
 } from "#execution/durable-session-store.js";
 import { buildRuntimeIdentity, createExecutionNodeStep } from "#execution/node-step.js";
-import { resolveEffectiveAgentRuntime } from "#execution/effective-agent-config.js";
+import {
+  resolveEffectiveAgentRuntime,
+  resolveSessionUsageLimit,
+} from "#execution/effective-agent-config.js";
 import { reconcileSessionContinuationToken } from "#execution/reconcile-session-continuation-token.js";
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
 import { createExecutionHistoryView } from "#execution/history-view.js";
@@ -296,6 +299,7 @@ async function runSessionStepBody(
   try {
     const dynamicConnections = bindDynamicConnections(ctx, bundle.resolvedAgent);
     const effectiveNode = { ...bundle.graph.root, turnAgent: effectiveAgent.turnAgent };
+    const sessionUsageLimit = resolveSessionUsageLimit(bundle);
     let compacted = false;
     const emitTurnEvent = createTurnEventHandler({
       abortSignal,
@@ -517,6 +521,7 @@ async function runSessionStepBody(
           nodeId: bundle.nodeId,
         },
         node: effectiveNode,
+        sessionUsageLimit,
         titleAttributeWrite: pendingAttributes.title,
       });
       return step(modelSession, stepInput);
