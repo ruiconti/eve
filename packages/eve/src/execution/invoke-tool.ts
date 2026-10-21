@@ -243,10 +243,19 @@ async function callSandbox(runtime: InvokeToolRuntime, sessionId: string): Promi
     sessionId,
     state: null,
   });
+  // This unkeyed access has no other opener or checkpoint: no request means no
+  // sandbox. Once requested, cleanup must cover failed or still-running starts.
+  let requested = false;
   return {
-    access,
+    access: {
+      ...access,
+      get() {
+        requested = true;
+        return access.get();
+      },
+    },
     async release() {
-      await access.end("completed");
+      if (requested) await access.end("completed");
     },
   };
 }
