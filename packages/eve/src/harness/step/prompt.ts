@@ -6,7 +6,7 @@ import {
   normalizeModelMessages,
   validateHarnessModelMessages,
 } from "#harness/messages.js";
-import { hasUnansweredToolCall } from "#harness/model-call/response.js";
+import { extractToolResultCallIds, hasUnansweredToolCall } from "#harness/model-call/response.js";
 import {
   getTurnClientContextState,
   setTurnClientContextState,
@@ -117,9 +117,48 @@ export function withClientContext(
 
 /** The prompt as the model reads it: with the client's context, projected for its history view. */
 export function projectPrompt(step: Step, prompt: Prompt): HarnessModelMessage[] {
-  return validateHarnessModelMessages(
-    normalizeModelMessages(step.projectHistory(withClientContext(prompt))),
+  return answerOrphanedToolCalls(
+    validateHarnessModelMessages(
+      normalizeModelMessages(step.projectHistory(withClientContext(prompt))),
+    ),
   );
+}
+
+const ORPHANED_TOOL_CALL_RESULT =
+  "interrupted: the tool call has no result, re-run it if still needed";
+
+/**
+ * Answers every tool call that has no result anywhere in `messages`, right after the assistant
+ * message that made it, so a history cut after a call (a crash, or an older version's saved step)
+ * does not fail every later model call with a missing-tool-results error. Calls answered anywhere,
+ * including provider-executed results kept inside their assistant message, are left alone.
+ */
+export function answerOrphanedToolCalls(messages: HarnessModelMessage[]): HarnessModelMessage[] {
+  const answered = extractToolResultCallIds(messages);
+  let changed = false;
+  const result: HarnessModelMessage[] = [];
+
+  for (const message of messages) {
+    result.push(message);
+    if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+    const orphans = message.content.filter(
+      (part) =>
+        typeof part === "object" && part.type === "tool-call" && !answered.has(part.toolCallId),
+    );
+    if (orphans.length === 0) continue;
+    changed = true;
+    result.push({
+      content: orphans.map((part) => ({
+        output: { type: "error-text" as const, value: ORPHANED_TOOL_CALL_RESULT },
+        toolCallId: (part as { toolCallId: string }).toolCallId,
+        toolName: (part as { toolName: string }).toolName,
+        type: "tool-result" as const,
+      })),
+      role: "tool",
+    });
+  }
+
+  return changed ? result : messages;
 }
 
 /**
