@@ -55,6 +55,7 @@ import {
 } from "#execution/sandbox/bindings/vercel-errors.js";
 import { withToolSessionRetention } from "#execution/sandbox/bindings/vercel-tool-sessions.js";
 import { isToolSessionId } from "#execution/tool-session/id.js";
+import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
 import {
   getNamedVercelSandbox,
   isVercelSnapshotCreated,
@@ -211,7 +212,7 @@ export function createVercelSandbox(
     return handle;
   }
 
-  return {
+  const implementation: ReturnType<typeof createVercelSandbox> = {
     async onSessionEnd(context, state) {
       await deleteNamedVercelSandbox({
         createOptions,
@@ -278,6 +279,9 @@ export function createVercelSandbox(
       };
     },
   };
+  // Saved filesystems expire, so a keyed tool session's sandbox is bounded.
+  // A handle is only an SDK client, so a call that ends has nothing to free.
+  return withToolSessionSandboxes(implementation);
 }
 
 /**

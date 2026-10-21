@@ -25,6 +25,7 @@ import {
 import { createLoggingSandboxSession } from "#execution/sandbox/logging-session.js";
 import { buildSandboxSession } from "#execution/sandbox/session.js";
 import { createSandboxProviderIdentity } from "#execution/sandbox/provider-identity.js";
+import { withToolSessionSandboxes } from "#execution/tool-session/sandbox.js";
 import type { JustBashSandboxCreateOptions } from "#public/sandbox/just-bash-sandbox.js";
 import { resolveSandboxCacheDirectory } from "#internal/application/paths.js";
 import type { SandboxSession } from "#shared/sandbox-session.js";
@@ -62,7 +63,7 @@ export function createJustBashSandboxProvider(
     version: 2,
   };
 
-  return {
+  const implementation: ReturnType<typeof createJustBashSandboxProvider> = {
     async onSessionEnd(context, state) {
       await rm(state?.rootPath ?? sessionRootPath(context), { force: true, recursive: true });
     },
@@ -138,6 +139,10 @@ export function createJustBashSandboxProvider(
       };
     },
   };
+  // Each handle runs its own interpreter in this process; stopping it keeps the root's files.
+  return withToolSessionSandboxes(implementation, {
+    releaseHandle: (handle) => handle.onSandboxStop(),
+  });
 }
 
 /**

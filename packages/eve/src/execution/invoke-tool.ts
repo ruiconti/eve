@@ -16,6 +16,11 @@ import { ContextContainer, contextStorage } from "#context/container.js";
 import { AuthKey, InitiatorAuthKey, SandboxKey, SessionIdKey, SessionKey } from "#context/keys.js";
 import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import { deriveToolSessionId, validateToolSessionKey } from "#execution/tool-session/id.js";
+import {
+  assertToolSessionSandboxSupport,
+  releaseToolSessionHandle,
+  ToolSessionSandboxUnsupportedError,
+} from "#execution/tool-session/sandbox.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import {
   AuthorizationHookKey,
@@ -222,9 +227,16 @@ async function keyedSandbox(runtime: InvokeToolRuntime, sessionId: string): Prom
     state: null,
   });
   return {
-    access,
+    access: {
+      ...access,
+      async get() {
+        assertToolSessionSandboxSupport(runtime.sandboxRegistry);
+        return await access.get();
+      },
+    },
     async release() {
-      await access.detach();
+      const handle = await access.detach();
+      if (handle !== undefined) await releaseToolSessionHandle(runtime.sandboxRegistry, handle);
     },
   };
 }
@@ -346,7 +358,12 @@ async function runCall(input: {
     if (returned) {
       return failedFromError(error, definition.name, "tool output could not be serialized");
     }
-    if (isConnectionAuthorizationFailedError(error)) return failed(toErrorMessage(error));
+    if (
+      isConnectionAuthorizationFailedError(error) ||
+      error instanceof ToolSessionSandboxUnsupportedError
+    ) {
+      return failed(toErrorMessage(error));
+    }
     return failedFromError(error, definition.name, "tool execution failed");
   }
   if (isAuthorizationSignal(output)) {
