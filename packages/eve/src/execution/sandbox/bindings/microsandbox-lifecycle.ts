@@ -235,7 +235,7 @@ export function microsandboxSessionIdentity(context: SandboxProviderSessionConte
 export async function createMicrosandboxHandle(
   input: Parameters<typeof openMicrosandboxHandle>[0],
 ) {
-  return await withMicrosandboxLifecycleLock(input.context.storagePath, () =>
+  return await withMicrosandboxLifecycleLock(input.context.storagePath, input.sessionIdentity, () =>
     openMicrosandboxHandle(input),
   );
 }
@@ -339,27 +339,35 @@ export async function deleteMicrosandboxSession(input: {
   readonly context: SandboxProviderSessionContext;
   readonly sessionIdentity: string;
 }): Promise<void> {
-  await withMicrosandboxLifecycleLock(input.context.storagePath, async () => {
-    const sessionRootPath = resolveMicrosandboxSessionRootPath(
-      input.context.storagePath,
-      input.sessionIdentity,
-    );
-    // Read current metadata under the same lock as create/restore; another process
-    // can have advanced it since this process last used a handle.
-    const module = await loadMicrosandboxWithoutInstall(input.context.host.resolveProjectPath("."));
-    if (module !== null) {
-      const metadata = await readSessionMetadata(resolveMicrosandboxMetadataPath(sessionRootPath));
-      await removeSandboxIfExists(
-        module,
-        metadata?.sandboxName ?? createProviderName("eve-sbx-ses", input.sessionIdentity),
+  await withMicrosandboxLifecycleLock(
+    input.context.storagePath,
+    input.sessionIdentity,
+    async () => {
+      const sessionRootPath = resolveMicrosandboxSessionRootPath(
+        input.context.storagePath,
+        input.sessionIdentity,
       );
-      if (metadata?.stateSnapshotName !== undefined) {
-        await removeSandboxIfExists(module, microsandboxRestoredSandboxName(metadata));
-        await removeSnapshotIfExists(module, metadata.stateSnapshotName);
+      // Read current metadata under the same lock as create/restore; another process
+      // can have advanced it since this process last used a handle.
+      const module = await loadMicrosandboxWithoutInstall(
+        input.context.host.resolveProjectPath("."),
+      );
+      if (module !== null) {
+        const metadata = await readSessionMetadata(
+          resolveMicrosandboxMetadataPath(sessionRootPath),
+        );
+        await removeSandboxIfExists(
+          module,
+          metadata?.sandboxName ?? createProviderName("eve-sbx-ses", input.sessionIdentity),
+        );
+        if (metadata?.stateSnapshotName !== undefined) {
+          await removeSandboxIfExists(module, microsandboxRestoredSandboxName(metadata));
+          await removeSnapshotIfExists(module, metadata.stateSnapshotName);
+        }
       }
-    }
-    await rm(sessionRootPath, { force: true, recursive: true });
-  });
+      await rm(sessionRootPath, { force: true, recursive: true });
+    },
+  );
 }
 
 function resolveMicrosandboxImage(
@@ -418,7 +426,7 @@ function createHandle(
   const session = buildSandboxSession(
     createMicrosandboxInternalSession(sandbox),
     async (policy) => {
-      await withMicrosandboxLifecycleLock(context.storagePath, () =>
+      await withMicrosandboxLifecycleLock(context.storagePath, sessionIdentity, () =>
         sandbox.setNetworkPolicy(policy),
       );
     },
@@ -429,10 +437,14 @@ function createHandle(
       await deleteMicrosandboxSession({ context, sessionIdentity });
     },
     async onSandboxStop() {
-      await withMicrosandboxLifecycleLock(context.storagePath, () => sandbox.stop());
+      await withMicrosandboxLifecycleLock(context.storagePath, sessionIdentity, () =>
+        sandbox.stop(),
+      );
     },
     async onRuntimeShutdown() {
-      await withMicrosandboxLifecycleLock(context.storagePath, () => sandbox.shutdown());
+      await withMicrosandboxLifecycleLock(context.storagePath, sessionIdentity, () =>
+        sandbox.shutdown(),
+      );
     },
   };
 }

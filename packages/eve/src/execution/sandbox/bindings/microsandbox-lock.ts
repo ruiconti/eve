@@ -2,23 +2,31 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 
+import { createSandboxProviderIdentity } from "#execution/sandbox/provider-identity.js";
+
 // A pending promise without an event source does not keep its async frame alive
 // for GC. Keep the native connection alive until the operation settles.
 const activeLocks = new Set<import("node:sqlite").DatabaseSync>();
 
-/** Serialize native lifecycle transitions across processes, including cleanup. */
+/**
+ * Serialize one session's native lifecycle transitions across processes,
+ * including cleanup. Sessions share a bounded set of lock files, so unrelated
+ * sessions rarely wait on each other and lock files never accumulate.
+ */
 export async function withMicrosandboxLifecycleLock<T>(
   storagePath: string,
+  sessionIdentity: string,
   operation: () => Promise<T>,
 ): Promise<T> {
   // SQLite's OS lock is released on process death. Heartbeat/stale-file locks
   // can admit two owners when a live process pauses, which would destroy a VM.
-  // Keep the database outside session directories and never unlink it: waiters
-  // must always lock the same inode, even while cleanup removes a session.
-  const directory = join(storagePath, "microsandbox");
+  // Keep the databases outside session directories and never unlink them:
+  // waiters must always lock the same inode, even while cleanup removes a session.
+  const directory = join(storagePath, "microsandbox", "locks");
   await mkdir(directory, { recursive: true });
+  const stripe = createSandboxProviderIdentity({ sessionIdentity }).slice(0, 2);
   const { DatabaseSync } = await import("node:sqlite");
-  const database = new DatabaseSync(join(directory, "lifecycle.sqlite"));
+  const database = new DatabaseSync(join(directory, `${stripe}.sqlite`));
   activeLocks.add(database);
   const deadline = Date.now() + 10 * 60_000;
   try {

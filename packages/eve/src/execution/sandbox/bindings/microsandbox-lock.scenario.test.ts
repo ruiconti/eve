@@ -24,7 +24,7 @@ describe("microsandbox cross-process lifecycle lock", () => {
           "-e",
           `
       import { withMicrosandboxLifecycleLock } from ${JSON.stringify(source)};
-      await withMicrosandboxLifecycleLock(${JSON.stringify(storagePath)}, async () => {
+      await withMicrosandboxLifecycleLock(${JSON.stringify(storagePath)}, "session", async () => {
         process.stdout.write("held\\n");
         if (${JSON.stringify(waiting)} === "timer") {
           await new Promise((resolve) => setTimeout(resolve, 60_000));
@@ -51,7 +51,7 @@ describe("microsandbox cross-process lifecycle lock", () => {
         const acquired = new Promise<void>((resolve) => {
           entered = resolve;
         });
-        pending = withMicrosandboxLifecycleLock(storagePath, async () => {
+        pending = withMicrosandboxLifecycleLock(storagePath, "session", async () => {
           entered();
         });
         expect(
@@ -70,4 +70,24 @@ describe("microsandbox cross-process lifecycle lock", () => {
       }
     },
   );
+
+  it("doesn't make another session wait for a session holding its lock", async () => {
+    const storagePath = await mkdtemp(join(tmpdir(), "eve-microsandbox-lock-"));
+    let release!: () => void;
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => (held = resolve));
+    const alice = withMicrosandboxLifecycleLock(storagePath, "alice-session", async () => {
+      held();
+      await new Promise<void>((resolve) => (release = resolve));
+    });
+    try {
+      await holding;
+      const bob = withMicrosandboxLifecycleLock(storagePath, "bob-session", async () => "entered");
+      expect(await Promise.race([bob, setTimeout(1000, "waited")])).toBe("entered");
+    } finally {
+      release();
+      await alice;
+      await rm(storagePath, { force: true, recursive: true });
+    }
+  });
 });
