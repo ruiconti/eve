@@ -8,8 +8,6 @@ import {
 } from "#execution/tools/workflow/ask.js";
 import { disposeHook } from "#execution/hook-ownership.js";
 import { runSignIn } from "#harness/session-machine/transitions.js";
-import type { WorkflowToolSandboxReply } from "#execution/tools/workflow/messages.js";
-import type { SandboxState } from "#sandbox/state.js";
 import type {
   WorkflowStepAuthorizationResult,
   WorkflowStepContext,
@@ -98,19 +96,6 @@ async function executeAuthorizedStep(
         return result.output;
       }
 
-      if (result.kind === "sandbox-required") {
-        try {
-          const state = await requestSessionSandbox(run, ctx.abortSignal);
-          run.sessionSandbox = state;
-        } catch (error) {
-          if (!ctx.abortSignal.aborted) {
-            await reportPendingAsFailed(run, ctx.abortSignal, pending);
-          }
-          throw error;
-        }
-        continue;
-      }
-
       await collectAuthorizationCallbacks({
         authorizationResults,
         callback,
@@ -135,7 +120,6 @@ async function invokeAuthorizedStep(input: {
   readonly run: WorkflowToolRunContext;
 }): Promise<WorkflowStepResult> {
   const { args, authorizationResults, callbackToken, ctx, execute, receiver, run } = input;
-  const captured = run.agentContext.sandbox.state;
   const context: WorkflowStepContext = {
     callId: ctx.callId,
     toolName: ctx.toolName,
@@ -147,7 +131,7 @@ async function invokeAuthorizedStep(input: {
     sandbox: {
       bundle: run.agentContext.bundle,
       sessionId: run.agentContext.sandbox.sessionId,
-      state: captured?.session == null ? (run.sessionSandbox ?? captured) : captured,
+      state: run.agentContext.sandbox.state,
     },
   };
   const invocation: WorkflowStepInvocation = {
@@ -268,36 +252,6 @@ async function reportAuthorization(
     await withAbort(acknowledged, signal);
   } finally {
     await disposeHook(acknowledged);
-  }
-}
-
-/**
- * Asks the session to open its sandbox, which it had not when the call was
- * made, and returns the state the step resumes. Only the session allocates
- * its sandbox, so the session records it and ends it with the session.
- */
-async function requestSessionSandbox(
-  run: WorkflowToolRunContext,
-  signal: AbortSignal,
-): Promise<SandboxState> {
-  const reply = createHook<WorkflowToolSandboxReply>();
-  try {
-    // Waits for registration, as for an authorization acknowledgement.
-    await reply.getConflict();
-    await withAbort(
-      run.owner.send({
-        kind: "request",
-        from: run.from,
-        replyTo: reply.token,
-        request: { kind: "sandbox-request" },
-      }),
-      signal,
-    );
-    const answer = await withAbort(reply, signal);
-    if (answer.kind === "failed") throw new Error(answer.message);
-    return answer.state;
-  } finally {
-    await disposeHook(reply);
   }
 }
 

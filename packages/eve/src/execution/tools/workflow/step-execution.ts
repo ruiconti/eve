@@ -2,7 +2,7 @@ import { getStepMetadata } from "#compiled/@workflow/core/index.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { AuthKey, InitiatorAuthKey, SandboxKey, SessionIdKey, SessionKey } from "#context/keys.js";
 import type { SessionContext } from "#context/session-context.js";
-import { borrowSessionSandbox, type BorrowedSandbox } from "#execution/sandbox/borrow.js";
+import { ensureSandboxAccess, type EnsuredSandboxAccess } from "#execution/sandbox/ensure.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { resolveDurableCompiledArtifactsSource } from "#runtime/durable-compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
@@ -10,7 +10,7 @@ import {
   hasSameSandboxEnvironmentConfiguration,
   type SandboxEnvironmentIdentity,
 } from "#shared/sandbox-environment.js";
-import type { SandboxAccess, SandboxState } from "#sandbox/state.js";
+import type { SandboxAccess } from "#sandbox/state.js";
 import { isConnectionAuthorizationFailedError } from "#connections/errors.js";
 import {
   isAuthorizationSignal,
@@ -47,7 +47,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
     context.setVirtualContext(AuthorizationHookKey, input.token);
     context.setVirtualContext(PendingAuthorizationResultKey, input.authorizationResults);
 
-    const sandbox = borrowStepSandbox(input);
+    const sandbox = openStepSandbox(input);
     return contextStorage.run(context, async (): Promise<WorkflowStepResult> => {
       const auth = createAuthorizationContext({
         scope: input.toolName,
@@ -102,7 +102,7 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
         if (isConnectionAuthorizationFailedError(error) && !error.retryable) {
           Object.assign(error, { fatal: true });
         }
-        if (!sandbox.required) throw error;
+        throw error;
       } finally {
         await sandbox.release();
       }
@@ -110,8 +110,6 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
       const authorized = input.authorizationResults
         .filter((result) => !remaining.includes(result))
         .map((result) => result.attemptId);
-      // Whatever the step did after asking, it runs again once the session opened its sandbox.
-      if (sandbox.required) return { kind: "sandbox-required", authorized };
       return isAuthorizationSignal(output)
         ? { kind: "authorization-required", signal: output, authorized }
         : { kind: "result", output, authorized };
@@ -123,55 +121,49 @@ export function withWorkflowStepAuthorization(execute: (...args: never[]) => unk
 }
 
 /**
- * The calling session's sandbox, resumed on the step's first `ctx.getSandbox()`
- * from the state the session recorded, and let go of when the step ends. Only
- * the session allocates its sandbox: without recorded state the step asks the
- * session to open it, and runs again once it has. The step never owns the
- * sandbox: the session's turns may be using it, so the step can neither stop
- * nor delete it. A step that never asks for it loads nothing.
+ * The calling session's sandbox, opened on the step's first `ctx.getSandbox()`
+ * under the key of the session that owns it, and let go of when the step
+ * ends. Recorded state, when the call captured it, resumes the sandbox;
+ * otherwise the provider's `start` upserts it by that key with the owner's
+ * sandbox definition, so the session finds the same sandbox and its
+ * session-end cleanup removes it. The step never owns the sandbox: the
+ * session's turns may be using it, so the step can neither stop nor delete it.
+ * A step that never asks for it loads nothing.
  */
-function borrowStepSandbox(input: WorkflowStepContext) {
+function openStepSandbox(input: WorkflowStepContext) {
   const { bundle, sessionId, state } = input.sandbox;
   // The step's own context replaces the delivery's, which carries the
   // development generation a development source resolves to.
   const delivery = contextStorage.getStore();
   const resolveSource = () => resolveDurableCompiledArtifactsSource(bundle.source);
-  let borrowing: Promise<BorrowedSandbox> | undefined;
-  let required = false;
-  const borrow = async (recorded: SandboxState): Promise<BorrowedSandbox> => {
+  let opening: Promise<EnsuredSandboxAccess> | undefined;
+  const open = async (): Promise<EnsuredSandboxAccess> => {
     const compiled = await getCompiledRuntimeAgentBundle({
       compiledArtifactsSource:
         delivery === undefined ? resolveSource() : contextStorage.run(delivery, resolveSource),
       nodeId: bundle.nodeId,
     });
     const node = compiled.graph.root;
-    return await borrowSessionSandbox({
+    return await ensureSandboxAccess({
       compiledArtifactsSource: compiled.compiledArtifactsSource,
       nodeId: node.nodeId,
+      ownsSandbox: false,
       registry: node.sandboxRegistry,
       sessionId,
-      state: recorded,
+      state: state ?? null,
       tracksHandle: false,
     });
   };
-  const borrowOnce = (): Promise<BorrowedSandbox> => {
-    if (state?.session == null) {
-      required = true;
-      throw new SandboxRequired();
-    }
-    borrowing ??= borrow(state).catch((error: unknown) => {
-      borrowing = undefined;
+  const openOnce = (): Promise<EnsuredSandboxAccess> => {
+    opening ??= open().catch((error: unknown) => {
+      opening = undefined;
       throw error;
     });
-    return borrowing;
+    return opening;
   };
   return {
-    /** Whether the step asked for a sandbox the session has not opened yet. */
-    get required() {
-      return required;
-    },
     async open(): Promise<SandboxAccess> {
-      const { access } = await borrowOnce();
+      const access = await openOnce();
       return {
         ...access,
         delete: () =>
@@ -187,22 +179,15 @@ function borrowStepSandbox(input: WorkflowStepContext) {
       };
     },
     async release(): Promise<void> {
-      const borrowed = await borrowing?.catch(() => undefined);
-      await borrowed?.release().catch((error: unknown) => {
+      const access = await opening?.catch(() => undefined);
+      await access?.detach().catch((error: unknown) => {
         logError(log, "failed to release a workflow step's sandbox", error, {
-          sessionId: input.sandbox.sessionId,
+          sessionId,
           toolName: input.toolName,
         });
       });
     },
   };
-}
-
-/** Ends a step that asked for the session's sandbox before the session opened it. */
-class SandboxRequired extends Error {
-  constructor() {
-    super("The session has not opened its sandbox yet; the step runs again once it has.");
-  }
 }
 
 function unavailableInStep(capability: string, guidance: string): never {

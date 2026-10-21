@@ -469,37 +469,23 @@ async function prepareInput(ctx: WorkflowStepToolContext, input: { value: string
 
 - The workflow body cannot open the sandbox, because it replays. `ctx.getSandbox()` in the body
   throws and tells you to pass `ctx` to a step helper.
+- The step opens the sandbox directly, with any sandbox provider. If the session recorded its
+  sandbox before it called the tool, the step resumes it. Otherwise the step opens it the way the
+  session's first turn would: it runs your `defineSandbox()` definition, and the provider finds or
+  creates the sandbox by the session's id. The session's later turns open the same sandbox. Your
+  definition can run once for each caller that opens the sandbox before the session records it,
+  so make its initialization safe to repeat.
 - The step does not own the sandbox. When the step ends, even by throwing, eve lets go of the
   step's handle and leaves the sandbox running for the session. eve never stops or deletes the
   sandbox for a step, and `sandbox.stop()` and `sandbox.delete()` in a step fail without a retry,
   because the session's turns may be using the sandbox.
+- The session removes the sandbox when the session ends, even when only a step opened it.
 - A step can use the sandbox while the session's turns use it too, as subagents that share a
   sandbox do. Give each one its own files to write.
 - Steps run at least once and retry after a failure, so make sandbox writes safe to repeat. Write
   whole files instead of appending to them, or check for earlier output first.
-- This works with any sandbox provider. If the session opened its sandbox before it called the
-  tool, the step resumes that sandbox from the state the session recorded, without running your
-  sandbox definition again.
-- If the session has not opened its sandbox yet, the step's first `ctx.getSandbox()` asks the
-  session to open it. The session opens it as its own turns would, through your sandbox
-  definition, and records it. eve then runs the step again from the start, so work before the
-  first `ctx.getSandbox()` in that step can run twice. Steps already run at least once, so make
-  that work safe to repeat as well.
-- Later steps of the same call, including steps that run at the same time, get the same sandbox,
-  and so do later calls of a `serve` task and the session's later turns. eve deletes it when the
-  session ends, as it does any sandbox the session opened.
-- A step resumes the state the session recorded and does not recover from a lost sandbox. If the
-  session deleted its sandbox, or the provider lost it, after the step got that state, the
-  step's `ctx.getSandbox()` fails like any other error in the step.
-- If the session cannot open its sandbox, for example because the agent defines none, the call
-  fails with an error that gives the reason.
-- When the session shares its parent's sandbox and neither has opened it yet, the session opens
-  the shared sandbox for the step, as its own turns would. As when a turn opens a shared sandbox
-  first, the parent does not record it. With a provider that names the sandbox from the session
-  id, such as Vercel Sandbox or just-bash, the parent finds that sandbox when it opens its own,
-  and eve deletes it when the parent ends. With a provider whose `start` creates a new sandbox
-  each time, the parent opens a different sandbox, and eve does not delete the one the session
-  opened.
+- When the session shares its parent's sandbox, the step opens it by the parent's session id with
+  the parent's sandbox definition, and the parent removes it when the parent ends.
 - A step runs wherever the workflow runs. A sandbox that lives on one machine, such as just-bash
   on the local disk, is reachable from a step only on that machine, as in local development.
 

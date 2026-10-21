@@ -45,6 +45,12 @@ interface EnsureSandboxAccessInput {
   readonly registry: RuntimeSandboxRegistry;
   readonly sessionId: string;
   readonly state: SandboxState | null;
+  /**
+   * `false` for a caller that borrows the sandbox of a session in this
+   * process, such as a workflow step: its handle stays out of the shutdown
+   * registry, where it would replace the session's handle and then drop it.
+   */
+  readonly tracksHandle?: boolean;
 }
 
 /** The access `ensureSandboxAccess` builds, with what the opener may do beyond the sandbox API. */
@@ -88,6 +94,12 @@ export async function ensureSandboxAccess(
   let opened: OpenedSandbox | undefined;
   let opening: Promise<SandboxProviderHandle> | undefined;
   let requiring: Promise<SandboxProviderHandle> | undefined;
+  const track: typeof trackActiveSandboxHandle = (entry) => {
+    if (input.tracksHandle !== false) trackActiveSandboxHandle(entry);
+  };
+  const untrack: typeof untrackActiveSandboxHandle = (entry) => {
+    if (input.tracksHandle !== false) untrackActiveSandboxHandle(entry);
+  };
   const appRoot =
     getRuntimeCompiledArtifactsSandboxAppRoot(input.compiledArtifactsSource) ?? process.cwd();
   const captured = (): SandboxState => ({ session: persisted });
@@ -222,7 +234,7 @@ export async function ensureSandboxAccess(
       });
     const handle = await opening;
     installHandle(provider.providerName, handle);
-    trackActiveSandboxHandle({
+    track({
       handle,
       providerName: provider.providerName,
       sessionId: input.sessionId,
@@ -300,7 +312,7 @@ export async function ensureSandboxAccess(
       persisted = null;
       throw error;
     }
-    trackActiveSandboxHandle({
+    track({
       handle: opened.handle,
       providerName: opened.providerName,
       sessionId: input.sessionId,
@@ -320,7 +332,7 @@ export async function ensureSandboxAccess(
   function forgetHandle() {
     const current = opened;
     if (current !== undefined) {
-      untrackActiveSandboxHandle({
+      untrack({
         handle: current.handle,
         providerName: current.providerName,
         sessionId: input.sessionId,

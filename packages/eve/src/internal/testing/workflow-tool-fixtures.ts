@@ -62,8 +62,21 @@ export async function sandboxParallelPrepareWorkflow(input: DeployInput, ctx: Wo
   return await readSandboxFilesStep(ctx);
 }
 
+const STEP_RUNS = Symbol.for("eve.test.sandbox-step-runs");
+
+/**
+ * How many times each sandbox-writing step ran, by file name, so a test can
+ * rule out reruns. Steps run from their own bundled copy of this module, so
+ * the count lives on `globalThis`.
+ */
+export function sandboxStepRuns(): Map<string, number> {
+  const shared = globalThis as typeof globalThis & { [STEP_RUNS]?: Map<string, number> };
+  return (shared[STEP_RUNS] ??= new Map());
+}
 async function writeSandboxFileStep(ctx: WorkflowStepToolContext, name: string, service: string) {
   "use step";
+  const runs = sandboxStepRuns();
+  runs.set(name, (runs.get(name) ?? 0) + 1);
   const sandbox = await ctx.getSandbox();
   await sandbox.writeTextFile({ content: `${name}:${service}`, path: `/workspace/${name}.txt` });
 }
@@ -75,20 +88,6 @@ async function readSandboxFilesStep(ctx: WorkflowStepToolContext) {
     config: await sandbox.readTextFile({ path: "/workspace/config.txt" }),
     plan: await sandbox.readTextFile({ path: "/workspace/plan.txt" }),
   };
-}
-
-export async function sandboxPrepareThenFailWorkflow(input: DeployInput, ctx: WorkflowToolContext) {
-  "use workflow";
-  return await prepareThenFailStep(input.service, ctx);
-}
-
-async function prepareThenFailStep(service: string, ctx: WorkflowStepToolContext) {
-  "use step";
-  const sandbox = await ctx.getSandbox();
-  await sandbox.writeTextFile({ content: `prepared:${service}`, path: "/workspace/prepared.txt" });
-  throw Object.assign(new Error(`The ${service} deploy failed after preparing its files.`), {
-    fatal: true,
-  });
 }
 
 export async function workflowContextMisuseWorkflow(_input: DeployInput, ctx: WorkflowToolContext) {

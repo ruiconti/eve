@@ -19,26 +19,18 @@ export interface WorkflowStepContext {
   readonly sandbox: WorkflowStepSandbox;
 }
 
-/** Where `ctx.getSandbox()` finds the calling session's sandbox: its agent and sandbox session. */
+/** Where `ctx.getSandbox()` finds the calling session's sandbox: its agent and sandbox key. */
 export interface WorkflowStepSandbox {
   readonly bundle: AgentSessionBundle;
-  /** The session whose sandbox the caller uses: its own, or the owner's it inherits. */
+  /** The session that owns the sandbox the caller uses: its own, or the owner's it shares. */
   readonly sessionId: string;
-  /**
-   * The session's recorded sandbox state, which the step resumes: captured
-   * when the call was made, or sent by the session when an earlier step of
-   * the call asked it to open its sandbox. Without one the step asks.
-   */
+  /** The caller's recorded sandbox state when the call was made, which the step resumes. */
   readonly state?: SandboxState;
 }
 
-export type WorkflowStepResult = {
-  readonly authorized: readonly string[];
-} & (
+export type WorkflowStepResult = { readonly authorized: readonly string[] } & (
   | { readonly kind: "result"; readonly output: unknown }
   | { readonly kind: "authorization-required"; readonly signal: AuthorizationSignal }
-  /** The step asked for the session's sandbox, which the session has not opened yet. */
-  | { readonly kind: "sandbox-required" }
 );
 
 /** Compiler-owned envelope; contextIndexes marks arguments replaced with step-local context. */

@@ -1,8 +1,8 @@
 import { defineEval } from "eve/evals";
 import { includes } from "eve/evals/expect";
 
-// A workflow step asks for the child's sandbox before the child opened it, so
-// the child opens it for the step; a later tool call reads the step's note.
+// A workflow step opens the child's sandbox before the child does, and a later
+// tool call of the child reads the step's note from the same sandbox.
 const NOTE = "step-sandbox-note-ok-H3R:prepared-in-step";
 
 export default defineEval({

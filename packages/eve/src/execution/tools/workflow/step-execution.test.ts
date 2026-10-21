@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { withWorkflowStepAuthorization } from "#execution/tools/workflow/step-execution.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { AuthKey } from "#context/keys.js";
@@ -13,7 +13,8 @@ import type {
 import type { ToolContext } from "#tools/definition.js";
 import type { WorkflowToolContext } from "#tools/workflow-definition.js";
 import type { AuthorizationDefinition } from "#shared/connection-types.js";
-import { keyedSandboxes } from "#internal/testing/keyed-sandboxes.js";
+import { mockSandbox } from "#internal/testing/mocks/mock-sandbox.js";
+import { defineSandbox } from "#public/definitions/sandbox.js";
 import { shutdownActiveSandboxHandles } from "#execution/sandbox/active-handles.js";
 import { ensureSandboxAccess } from "#execution/sandbox/ensure.js";
 import { withDevelopmentWorkflowGeneration } from "#internal/workflow/development-generation-context.js";
@@ -22,7 +23,10 @@ import {
   createDiskRuntimeCompiledArtifactsSource,
 } from "#runtime/compiled-artifacts-source.js";
 import type { RuntimeSandboxRegistry } from "#runtime/sandbox/registry.js";
-import { defineSandboxProvider } from "#shared/sandbox-provider.js";
+import {
+  defineSandboxProvider,
+  type SandboxProviderSessionContext,
+} from "#shared/sandbox-provider.js";
 
 const durable = vi.hoisted(() => ({
   attempt: 1,
@@ -64,6 +68,69 @@ vi.mock("#internal/workflow/runtime.js", () => ({
     }),
   }),
 }));
+
+/**
+ * A provider whose `start` upserts a sandbox by session id and whose
+ * `onSessionEnd` deletes by it, as the provider contract requires. Each open
+ * hands out its own handle over the shared sandbox; `shutDown` records which
+ * handles the runtime's shutdown stopped.
+ */
+function upsertSandboxes() {
+  const live = new Map<string, ReturnType<typeof mockSandbox>>();
+  const starts: string[] = [];
+  const resumes: string[] = [];
+  const handles: object[] = [];
+  const shutDown: object[] = [];
+  const stopped: Mock<() => Promise<void>> = vi.fn(async () => {});
+  const deleted: Mock<() => Promise<void>> = vi.fn(async () => {});
+  const handleFor = (key: string) => {
+    let sandbox = live.get(key);
+    if (sandbox === undefined) {
+      sandbox = mockSandbox();
+      live.set(key, sandbox);
+    }
+    const handle = {
+      sandbox: sandbox.session,
+      onRuntimeShutdown: async () => void shutDown.push(handle),
+      onSandboxDelete: deleted,
+      onSandboxStop: stopped,
+    };
+    handles.push(handle);
+    return handle;
+  };
+  const provider = defineSandboxProvider({
+    name: "upsert",
+    environment: () => ({
+      onSessionEnd: async (context: SandboxProviderSessionContext) =>
+        void live.delete(context.session.id),
+      prepare: async () => null,
+      resume: async (_context: unknown, _artifact: unknown, state: { readonly key: string }) => {
+        resumes.push(state.key);
+        return handleFor(state.key);
+      },
+      start: async (context: SandboxProviderSessionContext) => {
+        starts.push(context.session.id);
+        return { handle: handleFor(context.session.id), state: { key: context.session.id } };
+      },
+    }),
+  });
+  const environment = provider.environment();
+  const registry: RuntimeSandboxRegistry = {
+    sandbox: {
+      definition: {
+        environment,
+        kind: "independent",
+        logicalPath: "sandbox.ts",
+        revisionHash: "hash",
+        selector: defineSandbox(() => environment.open()),
+        sourceId: "sandbox",
+        sourceKind: "module",
+      },
+      workspaceResourceRoot: { logicalPath: "", rootEntries: [] },
+    },
+  };
+  return { deleted, handles, provider, registry, resumes, shutDown, starts, stopped };
+}
 
 function context(user = "user-1", sessionId = "session-1"): WorkflowStepContext {
   const auth = {
@@ -135,141 +202,87 @@ describe("workflow step authorization", () => {
     },
   );
 
-  it("opens the sandbox a child shares with its owner and lets go of it after each attempt", async () => {
-    // The owner opened its sandbox with options, which name a Vercel sandbox.
-    const openOptions = { tier: "large" };
-    const ownerKey = `owner-session:${JSON.stringify(openOptions)}`;
-    const { deleted, handles, registry, released, starts } = keyedSandboxes({
-      inherited: true,
-      openOptions,
-    });
+  it("opens the sandbox under its owner's key without recorded state, then resumes recorded state", async () => {
+    const { registry, resumes, starts } = upsertSandboxes();
     bundle.registry = registry;
-    // A child that has not opened the shared sandbox calls with its owner's session and state.
-    const input: WorkflowStepContext = {
-      ...context("user-1", "child-session"),
-      sandbox: {
-        bundle: { source: { kind: "development" } },
-        sessionId: "owner-session",
-        state: {
-          session: { providerName: "keyed", state: { key: ownerKey }, stateProtocolVersion: 1 },
-        },
-      },
-    };
+    // A child that shares its owner's sandbox calls with the owner's key.
+    const owner = { ...context("user-1", "owner-session") };
     // `eve dev` deliveries carry the generation a development source resolves to.
     const generation = {
       generationId: "generation-1",
       source: createDiskRuntimeCompiledArtifactsSource("/virtual/app"),
     };
-    const inDevelopment = <T>(run: () => Promise<T>) =>
-      withDevelopmentWorkflowGeneration(generation, run);
     const plan = { path: "/workspace/plan.txt" };
     await expect(
-      inDevelopment(() =>
-        runStep(async (ctx) => {
-          await (await ctx.getSandbox()).writeTextFile({ ...plan, content: "draft" });
-          throw new Error("temporary service failure");
-        }, input),
+      withDevelopmentWorkflowGeneration(generation, () =>
+        runStep(
+          async (ctx) => {
+            await (await ctx.getSandbox()).writeTextFile({ ...plan, content: "draft" });
+            return "written";
+          },
+          {
+            ...owner,
+            sandbox: { bundle: { source: { kind: "development" } }, sessionId: "owner-session" },
+          },
+        ),
       ),
-    ).rejects.toThrow("temporary service failure");
-    await expect(
-      inDevelopment(() =>
-        runStep(async (ctx) => await (await ctx.getSandbox()).readTextFile(plan), input),
-      ),
-    ).resolves.toMatchObject({ kind: "result", output: "draft" });
-    expect(bundle.loadedFrom).toEqual([generation.source, generation.source]);
-    expect(starts).toEqual([ownerKey]);
-    expect(handles).toHaveLength(2);
-    expect(released).toEqual(handles);
-    expect(deleted).not.toHaveBeenCalled();
-  });
+    ).resolves.toMatchObject({ kind: "result", output: "written" });
+    expect(bundle.loadedFrom).toEqual([generation.source]);
+    expect(starts).toEqual(["owner-session"]);
 
-  it("resumes the session's recorded sandbox on any provider, and asks the session when there is none", async () => {
-    let definitionRuns = 0;
-    // A custom provider whose `start` cannot find a session's sandbox again.
-    const { registry, starts } = keyedSandboxes({
-      failSelector: () => {
-        definitionRuns += 1;
-        return false;
-      },
-      reopensBySessionId: false,
-    });
-    bundle.registry = registry;
-    const plan = { path: "/workspace/plan.txt" };
-    // Asking ends the step even when the step catches the error, and starts nothing.
-    const write = async (ctx: ToolContext) => {
-      try {
-        await (await ctx.getSandbox()).writeTextFile({ ...plan, content: "draft" });
-      } catch {}
-      return "written";
-    };
-    await expect(runStep(write)).resolves.toEqual({ authorized: [], kind: "sandbox-required" });
-    expect(starts).toEqual([]);
-    expect(definitionRuns).toBe(0);
-    // The session opened its sandbox and recorded it.
     const recorded = {
-      session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
+      session: { providerName: "upsert", state: { key: "owner-session" }, stateProtocolVersion: 1 },
     };
-    const withRecorded = { ...context(), sandbox: { ...context().sandbox, state: recorded } };
-    await expect(runStep(write, withRecorded)).resolves.toMatchObject({
-      kind: "result",
-      output: "written",
-    });
     await expect(
-      runStep(async (ctx) => await (await ctx.getSandbox()).readTextFile(plan), withRecorded),
+      runStep(async (ctx) => await (await ctx.getSandbox()).readTextFile(plan), {
+        ...owner,
+        sandbox: { ...owner.sandbox, sessionId: "owner-session", state: recorded },
+      }),
     ).resolves.toMatchObject({ kind: "result", output: "draft" });
-    expect(definitionRuns).toBe(0);
+    expect(starts).toEqual(["owner-session"]);
+    expect(resumes).toEqual(["owner-session"]);
   });
 
-  it("leaves the session's handle tracked for runtime shutdown after a step borrows the sandbox", async () => {
+  it("leaves the session's handle tracked for runtime shutdown after a step uses the sandbox", async () => {
     await shutdownActiveSandboxHandles();
-    const { handles, registry, shutDown } = keyedSandboxes();
+    const { handles, registry, shutDown } = upsertSandboxes();
     bundle.registry = registry;
-    const recorded = {
-      session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
-    };
     // The session's turn opened its sandbox in this process.
     const session = await ensureSandboxAccess({
       compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
       nodeId: "__root__",
       registry,
       sessionId: "session-1",
-      state: recorded,
+      state: null,
     });
     await session.get();
     const sessionHandle = handles[0];
-    await expect(
-      runStep(async (ctx) => void (await ctx.getSandbox()), {
-        ...context(),
-        sandbox: { ...context().sandbox, state: recorded },
-      }),
-    ).resolves.toMatchObject({ kind: "result" });
+    await expect(runStep(async (ctx) => void (await ctx.getSandbox()))).resolves.toMatchObject({
+      kind: "result",
+    });
     await shutdownActiveSandboxHandles();
     expect(handles).toHaveLength(2);
     expect(shutDown).toEqual([sessionHandle]);
   });
 
   it("accepts its own copy of the session's environment and leaves stopping and deleting to the session", async () => {
-    const { deleted, provider, registry, stopped } = keyedSandboxes();
+    const { deleted, provider, registry, stopped } = upsertSandboxes();
     bundle.registry = registry;
-    const input: WorkflowStepContext = {
-      ...context(),
-      sandbox: {
-        ...context().sandbox,
-        state: {
-          session: { providerName: "keyed", state: { key: "session-1" }, stateProtocolVersion: 1 },
-        },
-      },
-    };
     // The step imports its own copy of the module that declares the environment.
     await expect(
       runStep(async (ctx) => {
         await ctx.getSandbox(provider.environment());
         return "opened";
-      }, input),
+      }),
     ).resolves.toMatchObject({ output: "opened" });
     const other = defineSandboxProvider({
       name: "other",
-      environment: () => ({ prepare: async () => null, resume: vi.fn(), start: vi.fn() }),
+      environment: () => ({
+        onSessionEnd: async () => {},
+        prepare: async () => null,
+        resume: vi.fn(),
+        start: vi.fn(),
+      }),
     }).environment();
     const misuse: [string, (ctx: ToolContext) => Promise<unknown>][] = [
       ["received a sandbox environment", (ctx) => ctx.getSandbox(other)],
@@ -277,7 +290,7 @@ describe("workflow step authorization", () => {
       ["sandbox.delete() is unavailable", async (ctx) => await (await ctx.getSandbox()).delete()],
     ];
     for (const [message, access] of misuse) {
-      await expect(runStep(access, input)).rejects.toMatchObject({
+      await expect(runStep(access)).rejects.toMatchObject({
         fatal: true,
         message: expect.stringContaining(message),
       });

@@ -14,7 +14,7 @@ export default defineWorkflowTool({
 
 async function prepareNote(ctx: WorkflowStepToolContext) {
   "use step";
-  // The session has not opened its sandbox yet, so it opens it for this step.
+  // The session has not opened its sandbox yet, so the step creates it under the session's id.
   // The step imports its own copy of the environment the session's sandbox uses.
   const sandbox = await ctx.getSandbox(environment);
   // Writing the whole file keeps a retried step's write the same.
