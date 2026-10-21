@@ -122,6 +122,7 @@ export function createVercelSandbox(
     (async () => await import("#compiled/@vercel/sandbox/index.js"));
   const createOptions: ResolvedVercelCreateOptions = {
     ...input.createOptions,
+    env: { ...SANDBOX_AGENT_ENV, ...input.createOptions?.env },
     timeout: input.createOptions?.timeout ?? DEFAULT_SANDBOX_TIMEOUT_MS,
   };
   const createSandbox = input.createSandbox ?? createVercelEveImageSandbox;
@@ -135,7 +136,11 @@ export function createVercelSandbox(
     const artifact = requirePreparedVercelTemplate(artifactValue);
     const { mounts, ...runtimeOptions } = options ?? {};
     const toolSession = isToolSessionId(context.session.id);
-    const authoredCreateOptions = { ...createOptions, ...runtimeOptions };
+    const authoredCreateOptions = {
+      ...createOptions,
+      ...runtimeOptions,
+      env: { ...SANDBOX_AGENT_ENV, ...(runtimeOptions.env ?? createOptions.env) },
+    };
     const sessionCreateOptions = toolSession
       ? withToolSessionRetention(authoredCreateOptions)
       : authoredCreateOptions;
@@ -394,7 +399,7 @@ async function prepareTemplateSnapshot(
     await applyInitialVercelNetworkPolicy(sandbox, input.createOptions.networkPolicy);
 
     const templateSession = buildSandboxSession(
-      createVercelInternalSandboxSession(sandbox, input.createOptions.env),
+      createVercelInternalSandboxSession(sandbox),
       createVercelNetworkPolicySetter(sandbox),
     );
 
@@ -597,7 +602,7 @@ function createHandle(input: {
   return {
     sandbox: {
       ...buildSandboxSession(
-        createVercelInternalSandboxSession(sandbox, input.createOptions.env),
+        createVercelInternalSandboxSession(sandbox),
         createVercelNetworkPolicySetter(sandbox),
       ),
       name: sandbox.name,
@@ -623,11 +628,7 @@ function createHandle(input: {
   };
 }
 
-function createVercelInternalSandboxSession(
-  sandbox: VercelSandbox,
-  environmentEnv: Readonly<Record<string, string>> | undefined,
-): InternalSandboxSession {
-  const baseEnv = { ...SANDBOX_AGENT_ENV, ...environmentEnv };
+function createVercelInternalSandboxSession(sandbox: VercelSandbox): InternalSandboxSession {
   return {
     resolvePath: resolveVercelSandboxPath,
     async spawn(options: SandboxSpawnOptions): Promise<SandboxProcess> {
@@ -636,7 +637,7 @@ function createVercelInternalSandboxSession(
         cmd: "bash",
         cwd: options.workingDirectory ?? WORKSPACE_ROOT,
         detached: true,
-        env: { ...baseEnv, ...options.env },
+        env: options.env,
         signal: options.abortSignal,
       });
       return adaptMultiplexedCommandToSandboxProcess({

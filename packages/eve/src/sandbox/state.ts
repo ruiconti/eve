@@ -11,11 +11,6 @@ export interface SandboxSessionState {
 }
 
 export interface SandboxState {
-  /**
-   * Set once a sandbox may exist under this session's key without `session` recording it:
-   * the session started one, or started a run whose agents can share it.
-   */
-  readonly mayExist?: true;
   readonly session: SandboxSessionState | null;
 }
 

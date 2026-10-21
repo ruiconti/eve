@@ -51,8 +51,8 @@ interface EnsureSandboxAccessInput {
 export interface EnsuredSandboxAccess extends SandboxAccess {
   /**
    * Permanently releases what the provider keeps under this access's key
-   * when the owning session ends. Calls the provider only when a sandbox may
-   * exist there, and waits for an open still in flight first.
+   * when the owning session ends, even when its last checkpoint recorded no
+   * sandbox. Waits for this access's open still in flight first.
    */
   end(reason: SandboxSessionEndReason): Promise<void>;
   /**
@@ -85,14 +85,12 @@ export async function ensureSandboxAccess(
   // no sandbox and let the selector start a fresh one.
   let persisted: SandboxSessionState | null =
     input.state?.session?.providerName === undefined ? null : input.state.session;
-  let mayExist = input.state?.mayExist === true;
   let opened: OpenedSandbox | undefined;
   let opening: Promise<SandboxProviderHandle> | undefined;
   let requiring: Promise<SandboxProviderHandle> | undefined;
   const appRoot =
     getRuntimeCompiledArtifactsSandboxAppRoot(input.compiledArtifactsSource) ?? process.cwd();
-  const captured = (): SandboxState =>
-    mayExist ? { mayExist: true, session: persisted } : { session: persisted };
+  const captured = (): SandboxState => ({ session: persisted });
   const registered = input.registry.sandbox;
   if (registered === null) {
     return {
@@ -167,7 +165,6 @@ export async function ensureSandboxAccess(
 
     const artifact = await loadArtifact(provider);
     const createHandle = async () => {
-      mayExist = true;
       const result = await provider.implementation.start(context, options, artifact);
       if (!isSandboxPreparedArtifact(result.state)) {
         throw new Error(
@@ -359,7 +356,8 @@ export async function ensureSandboxAccess(
     async end(reason: SandboxSessionEndReason) {
       if (input.ownsSandbox === false) return;
       if (requiring !== undefined) await requiring.catch(() => undefined);
-      if (persisted === null && !mayExist) return;
+      // A failed step or process loss can create a sandbox without committing
+      // any state. The previous checkpoint cannot prove that the key is unused.
       const provider = getSandboxEnvironmentRuntime(activeDefinition().environment);
       // State another provider or protocol recorded is no use here; the key still finds
       // what this provider keeps.
@@ -373,7 +371,6 @@ export async function ensureSandboxAccess(
       });
       forgetHandle();
       persisted = null;
-      mayExist = false;
     },
     async get() {
       await requireHandle();

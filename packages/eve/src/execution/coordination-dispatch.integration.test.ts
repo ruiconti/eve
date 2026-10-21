@@ -126,8 +126,7 @@ describe("coordination dispatch", () => {
       const dispatching = await runUntilSessionEnds('Run deploy_service with service "api"');
       const plain = await runUntilSessionEnds("hello there");
 
-      expect(runtime.sandboxCleanups).toEqual([dispatching]);
-      expect(runtime.sandboxCleanups).not.toContain(plain);
+      expect(runtime.sandboxCleanups).toEqual([dispatching, plain]);
     });
   }, 60_000);
 });

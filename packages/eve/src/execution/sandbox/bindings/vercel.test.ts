@@ -1451,7 +1451,7 @@ describe("createVercelSandbox", () => {
     );
   });
 
-  it("forwards env with the AI_AGENT default to runCommand when spawning a process", async () => {
+  it("creates with the AI_AGENT default and forwards per-command env when spawning a process", async () => {
     const templateSandbox = createMockSandbox({ name: "template" });
     const sessionSandbox = createMockSandbox({ name: "session" });
     const sandboxModule = {
@@ -1477,6 +1477,9 @@ describe("createVercelSandbox", () => {
     vi.mocked(sessionSandbox.runCommand).mockResolvedValue(createMockDetachedCommand() as never);
     vi.mocked(sessionSandbox.runCommand).mockClear();
 
+    expect(sandboxModule.Sandbox.create).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { AI_AGENT: "eve" } }),
+    );
     await handle.sandbox.spawn({
       command: "printenv DEPLOY_ENV",
       env: { DEPLOY_ENV: "staging" },
@@ -1487,51 +1490,84 @@ describe("createVercelSandbox", () => {
       expect.objectContaining({
         args: ["-lc", "printenv DEPLOY_ENV"],
         cmd: "bash",
-        env: { AI_AGENT: "eve", DEPLOY_ENV: "staging" },
+        env: { DEPLOY_ENV: "staging" },
       }),
     );
   });
 
-  it("lets environment env override the AI_AGENT default when running a command", async () => {
-    const templateSandbox = createMockSandbox({ name: "template" });
-    const sessionSandbox = createMockSandbox({ name: "session" });
-    const sandboxModule = {
-      Sandbox: {
-        create: createSandboxesInOrder(templateSandbox, sessionSandbox),
-        get: vi.fn().mockResolvedValue(null),
-      },
-    };
-
+  it("keeps native env, mounts, and network options when reopening a key with changed options", async () => {
+    const fake = createFakeVercelProvider();
     const provider = createTestVercelSandbox({
-      createOptions: { env: { AI_AGENT: "alice-bot" } },
-      loadSandboxModule: async () => sandboxModule as never,
+      loadSandboxModule: async () => fake.sandboxModule as never,
     });
-
-    await provider.prepare({
+    const first = await provider.start({
       appRoot: "/tmp/test-app-root",
-      seedFiles: [],
+      sandboxName: "immutable-options",
+      prepared: {},
+      options: {
+        env: { AI_AGENT: "alice-bot", REVIEW_VALUE: "initial" },
+        mounts: { "/workspace/data": { drive: "initial-drive", mode: "read-write" } },
+        networkPolicy: "deny-all",
+      },
     });
-    const handle = await provider.openSession({
-      appRoot: "/tmp/test-app-root",
-      sandboxName: "session-key",
-    });
-
-    vi.mocked(sessionSandbox.runCommand).mockResolvedValue(createMockDetachedCommand() as never);
-    vi.mocked(sessionSandbox.runCommand).mockClear();
-
-    await handle.sandbox.run({
-      command: "printenv DEPLOY_ENV",
-      env: { DEPLOY_ENV: "production" },
-    });
-
-    expect(sessionSandbox.runCommand).toHaveBeenCalledTimes(1);
-    expect(sessionSandbox.runCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["-lc", "printenv DEPLOY_ENV"],
-        cmd: "bash",
-        env: { AI_AGENT: "alice-bot", DEPLOY_ENV: "production" },
-      }),
+    const created = fake.sandboxModule.Sandbox.create.mock.calls[0]![0] as MockCreateOptions & {
+      env: Record<string, string>;
+      mounts: object;
+    };
+    const sandbox = [...fake.sandboxes.values()][0]!;
+    // The native sandbox keeps create-time env. Commands may override individual
+    // variables, but reconnecting does not change those native defaults.
+    sandbox.runCommand.mockImplementation(
+      async (command: { detached?: boolean; env?: Record<string, string> }) =>
+        command.detached
+          ? (createMockDetachedCommand([
+              {
+                data: JSON.stringify({ ...created.env, ...command.env }),
+                stream: "stdout",
+              },
+            ]) as never)
+          : createMockCommandResult(),
     );
+    const readEnv = async (handle: typeof first.handle) =>
+      JSON.parse((await handle.sandbox.run({ command: "env" })).stdout);
+    expect(await readEnv(first.handle)).toEqual({ AI_AGENT: "alice-bot", REVIEW_VALUE: "initial" });
+
+    const reopened = await provider.start({
+      appRoot: "/tmp/test-app-root",
+      sandboxName: "immutable-options",
+      prepared: { snapshotId: "new-deployment-template" },
+      options: {
+        env: { AI_AGENT: "bob-bot", REVIEW_VALUE: "changed" },
+        mounts: { "/workspace/data": { drive: "changed-drive", mode: "snapshot" } },
+        networkPolicy: "allow-all",
+      },
+    });
+    const resumed = await provider.openSession({
+      appRoot: "/tmp/test-app-root",
+      sandboxName: "immutable-options",
+      prepared: {},
+      existing: first.state,
+    });
+    expect(await readEnv(reopened.handle)).toEqual({
+      AI_AGENT: "alice-bot",
+      REVIEW_VALUE: "initial",
+    });
+    expect(await readEnv(resumed)).toEqual({ AI_AGENT: "alice-bot", REVIEW_VALUE: "initial" });
+    const overridden = await resumed.sandbox.run({
+      command: "env",
+      env: { REVIEW_VALUE: "per-command" },
+    });
+    expect(JSON.parse(overridden.stdout)).toEqual({
+      AI_AGENT: "alice-bot",
+      REVIEW_VALUE: "per-command",
+    });
+    expect(fake.sandboxModule.Sandbox.create).toHaveBeenCalledTimes(1);
+    expect(created.mounts).toEqual({
+      "/workspace/data": { drive: "initial-drive", mode: "read-write" },
+    });
+    expect(sandbox.update.mock.calls.filter(([update]) => "networkPolicy" in update)).toEqual([
+      [{ networkPolicy: "deny-all" }],
+    ]);
   });
 
   it("prepares the base runtime during sandbox init", async () => {

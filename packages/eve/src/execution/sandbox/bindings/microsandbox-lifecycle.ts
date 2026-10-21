@@ -4,6 +4,7 @@ type NetworkPolicySandboxSession = SandboxSession & {
   setNetworkPolicy(policy: SandboxNetworkPolicy): Promise<void>;
 };
 import { randomUUID } from "node:crypto";
+import { withMicrosandboxLifecycleLock } from "#execution/sandbox/bindings/microsandbox-lock.js";
 
 import {
   hydrateSandboxProviderResources,
@@ -32,6 +33,7 @@ import {
   type MicrosandboxTemplateMetadata,
   readSessionMetadata,
   readTemplateMetadata,
+  writeSessionMetadata,
   resolveMicrosandboxMetadataPath,
   writeTemplateMetadata,
 } from "#execution/sandbox/bindings/microsandbox-metadata.js";
@@ -45,6 +47,7 @@ import {
   doesPathExist,
   loadMicrosandboxModule,
   loadMicrosandboxWithoutInstall,
+  microsandboxRestoredSandboxName,
   type MicrosandboxVm,
   removeSandboxIfExists,
   removeSnapshotIfExists,
@@ -76,11 +79,6 @@ export type MicrosandboxPreparedArtifact = {
   readonly snapshotName: string;
   readonly version: typeof MICROSANDBOX_METADATA_VERSION;
 };
-
-const activeMicrosandboxSessionHandles = new Map<
-  string,
-  SandboxProviderHandle<NetworkPolicySandboxSession>
->();
 
 export async function prewarmMicrosandboxTemplate(input: {
   readonly providerName: string;
@@ -234,7 +232,15 @@ export function microsandboxSessionIdentity(context: SandboxProviderSessionConte
   ).slice(0, 32);
 }
 
-export async function createMicrosandboxHandle(input: {
+export async function createMicrosandboxHandle(
+  input: Parameters<typeof openMicrosandboxHandle>[0],
+) {
+  return await withMicrosandboxLifecycleLock(input.context.storagePath, () =>
+    openMicrosandboxHandle(input),
+  );
+}
+
+async function openMicrosandboxHandle(input: {
   readonly artifact: MicrosandboxPreparedArtifact;
   readonly context: SandboxProviderSessionContext;
   readonly createIfMissing: boolean;
@@ -262,10 +268,7 @@ export async function createMicrosandboxHandle(input: {
     networkPolicy: input.runtimeOptions?.networkPolicy,
   };
   const module = await loadMicrosandboxModule({ host: input.context.host, options });
-  const activeSessionKey = sessionRootPath;
-  const activeHandle = activeMicrosandboxSessionHandles.get(activeSessionKey);
   const state = { sessionIdentity, version: 3 as const };
-  if (activeHandle !== undefined) return { handle: activeHandle, state };
 
   const sessionTags = withDevelopmentSandboxMetadataPathTag(
     { sessionId: input.context.session.id },
@@ -287,12 +290,7 @@ export async function createMicrosandboxHandle(input: {
     });
     if (connected !== null) {
       return {
-        handle: cacheHandle(
-          activeSessionKey,
-          createHandle(connected, input.optionsHash, () => {
-            activeMicrosandboxSessionHandles.delete(activeSessionKey);
-          }),
-        ),
+        handle: createHandle(connected, input.context, sessionIdentity),
         state,
       };
     }
@@ -312,6 +310,15 @@ export async function createMicrosandboxHandle(input: {
     });
   }
   const sandboxName = createProviderName("eve-sbx-ses", sessionIdentity);
+  // Record the target before boot. If this process dies after creation, the next
+  // opener attaches to the VM instead of rebuilding its writable filesystem.
+  await writeSessionMetadata(metadataPath, {
+    image: options.image,
+    networkPolicy: options.networkPolicy,
+    optionsHash: input.optionsHash,
+    sandboxName,
+    version: MICROSANDBOX_METADATA_VERSION,
+  });
   const sandbox = await createPreparedMicrosandbox({
     fromSnapshot: preparedTemplate.snapshotName,
     module,
@@ -323,12 +330,7 @@ export async function createMicrosandboxHandle(input: {
     tags: sessionTags,
   });
   await sandbox.writeMetadata(metadataPath, input.optionsHash);
-  const handle = cacheHandle(
-    activeSessionKey,
-    createHandle(sandbox, input.optionsHash, () => {
-      activeMicrosandboxSessionHandles.delete(activeSessionKey);
-    }),
-  );
+  const handle = createHandle(sandbox, input.context, sessionIdentity);
   return { handle, state };
 }
 
@@ -337,29 +339,27 @@ export async function deleteMicrosandboxSession(input: {
   readonly context: SandboxProviderSessionContext;
   readonly sessionIdentity: string;
 }): Promise<void> {
-  const sessionRootPath = resolveMicrosandboxSessionRootPath(
-    input.context.storagePath,
-    input.sessionIdentity,
-  );
-  const active = activeMicrosandboxSessionHandles.get(sessionRootPath);
-  if (active !== undefined) {
-    await active.onSandboxDelete();
-  } else {
-    // Without the runtime installed, no VM can exist.
+  await withMicrosandboxLifecycleLock(input.context.storagePath, async () => {
+    const sessionRootPath = resolveMicrosandboxSessionRootPath(
+      input.context.storagePath,
+      input.sessionIdentity,
+    );
+    // Read current metadata under the same lock as create/restore; another process
+    // can have advanced it since this process last used a handle.
     const module = await loadMicrosandboxWithoutInstall(input.context.host.resolveProjectPath("."));
     if (module !== null) {
       const metadata = await readSessionMetadata(resolveMicrosandboxMetadataPath(sessionRootPath));
-      // A VM exists under its identity's name before its metadata is written.
       await removeSandboxIfExists(
         module,
         metadata?.sandboxName ?? createProviderName("eve-sbx-ses", input.sessionIdentity),
       );
       if (metadata?.stateSnapshotName !== undefined) {
+        await removeSandboxIfExists(module, microsandboxRestoredSandboxName(metadata));
         await removeSnapshotIfExists(module, metadata.stateSnapshotName);
       }
     }
-  }
-  await rm(sessionRootPath, { force: true, recursive: true });
+    await rm(sessionRootPath, { force: true, recursive: true });
+  });
 }
 
 function resolveMicrosandboxImage(
@@ -412,41 +412,31 @@ function requirePreparedMicrosandboxTemplate(
 
 function createHandle(
   sandbox: MicrosandboxVm,
-  _optionsHash: string,
-  onShutdown?: () => void,
+  context: SandboxProviderSessionContext,
+  sessionIdentity: string,
 ): SandboxProviderHandle<NetworkPolicySandboxSession> {
   const session = buildSandboxSession(
     createMicrosandboxInternalSession(sandbox),
     async (policy) => {
-      await sandbox.setNetworkPolicy(policy);
+      await withMicrosandboxLifecycleLock(context.storagePath, () =>
+        sandbox.setNetworkPolicy(policy),
+      );
     },
   );
   return {
     sandbox: session,
     async onSandboxDelete() {
-      await sandbox.shutdown();
-      await sandbox.removePersisted();
-      onShutdown?.();
+      await deleteMicrosandboxSession({ context, sessionIdentity });
     },
     async onSandboxStop() {
-      await sandbox.stop();
-      onShutdown?.();
+      await withMicrosandboxLifecycleLock(context.storagePath, () => sandbox.stop());
     },
     async onRuntimeShutdown() {
-      onShutdown?.();
-      await sandbox.shutdown();
+      await withMicrosandboxLifecycleLock(context.storagePath, () => sandbox.shutdown());
     },
   };
 }
 
 function createMicrosandboxInternalSession(sandbox: MicrosandboxVm): InternalSandboxSession {
   return createFileBackedInternalSandboxSession({ sandbox });
-}
-
-function cacheHandle(
-  key: string,
-  handle: SandboxProviderHandle<NetworkPolicySandboxSession>,
-): SandboxProviderHandle<NetworkPolicySandboxSession> {
-  activeMicrosandboxSessionHandles.set(key, handle);
-  return handle;
 }

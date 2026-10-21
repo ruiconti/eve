@@ -374,36 +374,6 @@ describe("ensureSandboxAccess", () => {
     await expect(access.captureState()).resolves.toEqual({ session: null });
   });
 
-  it("keeps a sandbox whose initialization failed for session end to clean up by key", async () => {
-    const value = fixture(() => {
-      throw new Error("setup failed");
-    });
-    const access = await ensureSandboxAccess({
-      compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
-      nodeId: "__root__",
-      registry: value.registry,
-      sessionId: "session-1",
-      state: null,
-    });
-    await expect(access.get()).rejects.toThrow("setup failed");
-    expect(value.deleteSandbox).not.toHaveBeenCalled();
-
-    const ending = await ensureSandboxAccess({
-      compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
-      nodeId: "__root__",
-      registry: value.registry,
-      sessionId: "session-1",
-      state: await access.captureState(),
-    });
-    await ending.end("failed");
-
-    expect(value.onSessionEnd).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ session: expect.objectContaining({ id: "session-1" }) }),
-      null,
-      { reason: "failed" },
-    );
-  });
-
   it("removes a sandbox a sharing child opened when the parent session ends without opening it", async () => {
     const value = upsertingFixture();
     const child = await ensureSandboxAccess({
@@ -418,20 +388,20 @@ describe("ensureSandboxAccess", () => {
     await child.end("completed");
     expect([...value.live.keys()]).toEqual(["parent-session"]);
 
-    // The parent never opened the sandbox; starting the child's run recorded only that one may exist.
+    // The parent never opened the sandbox and has no checkpointed provider state.
     const parent = await ensureSandboxAccess({
       compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
       nodeId: "__root__",
       registry: value.registry,
       sessionId: "parent-session",
-      state: { mayExist: true, session: null },
+      state: null,
     });
     await parent.end("completed");
 
     expect(value.live.size).toBe(0);
   });
 
-  it("leaves the provider alone when a session that never used a sandbox ends", async () => {
+  it("cleans up an unrecorded key at session end without starting a sandbox", async () => {
     const value = fixture();
     const access = await ensureSandboxAccess({
       compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
@@ -443,7 +413,11 @@ describe("ensureSandboxAccess", () => {
 
     await access.end("expired");
 
-    expect(value.onSessionEnd).not.toHaveBeenCalled();
+    expect(value.onSessionEnd).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ session: expect.objectContaining({ id: "unused" }) }),
+      null,
+      { reason: "expired" },
+    );
     expect(value.start).not.toHaveBeenCalled();
     expect(value.create).not.toHaveBeenCalled();
   });
