@@ -75,6 +75,7 @@ import {
 } from "#internal/testing/session-machine.js";
 import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { appendMissingToolResultMessages } from "#harness/model-call/response.js";
+import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import { createTask, writeTaskTable } from "#execution/tasks/table.js";
 import { SessionLimitDeclinedError, TurnCancelledError } from "#harness/turn-cancellation.js";
@@ -101,6 +102,11 @@ import { countRunUsage } from "#execution/agent-sessions/usage.js";
 // The harness runs outside a workflow body here, where run attributes cannot
 // be written; the attribute contract is covered by emit.test.ts.
 vi.mock("#runtime/attributes/emit.js", () => ({ setEveAttributes: vi.fn(async () => {}) }));
+
+// This suite supplies public SDK events; native provider streams use the real-SDK integration suite.
+vi.mock("#harness/model-call/stream-integrity.js", () => ({
+  withModelStreamIntegrity: (model: LanguageModel) => model,
+}));
 
 vi.mock("ai", async (importOriginal) => ({
   ...(await importOriginal<typeof import("ai")>()),
@@ -489,7 +495,7 @@ function createMockStreamResult(
       yield* fullStreamParts === null
         ? createMockFullStream(result)
         : createExplicitMockFullStream(fullStreamParts);
-      if (result.missingProviderFinish !== true) {
+      if (!fullStreamParts?.some((part) => part.type === "error")) {
         await settings.onLanguageModelCallEnd?.({
           content: result.content ?? result.toolCalls ?? [],
           finishReason: result.finishReason,
@@ -968,7 +974,15 @@ describe("createToolLoopHarness", () => {
     };
     setupMockAgent({
       finishReason: "other",
-      missingProviderFinish: true,
+      fullStreamParts: [
+        { id: "text", type: "text-delta", text: "Partial answer" },
+        call,
+        { ...call, toolCallId: "unanswered" },
+        { type: "error", error: new IncompleteModelStreamError() },
+        // In-flight tool results can settle after the provider ends.
+        { ...completed, input: {}, output: { saved: true } },
+        { type: "finish-step", finishReason: "error" },
+      ],
       response: {
         messages: [
           {

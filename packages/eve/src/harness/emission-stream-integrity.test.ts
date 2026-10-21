@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { defaultMessageReducer } from "#client/message-reducer.js";
 import { stampTestEvents } from "#internal/testing/events.js";
 import { emitStreamContent } from "#harness/emission.js";
+import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 import type { TurnPosition } from "#harness/session-machine/view.js";
 import type { HarnessEmitFn } from "#harness/types.js";
 
@@ -18,6 +19,26 @@ function createEmitStub(): HarnessEmitFn {
 }
 
 describe("emitStreamContent provider completion", () => {
+  it.each(["error", "abort"] as const)(
+    "does not hide a later %s behind an incomplete event or deliver deferred completions",
+    async (type) => {
+      const emit = createEmitStub();
+      const original = new Error("upstream failed");
+      async function* stream(): AsyncIterable<TextStreamPart<ToolSet>> {
+        yield { id: "reasoning", text: "Thinking", type: "reasoning-delta" };
+        yield { id: "answer", text: "Partial answer", type: "text-delta" };
+        yield { type: "error", error: new IncompleteModelStreamError() };
+        yield type === "error" ? { type, error: original } : { type, reason: "cancelled" };
+      }
+      const run = emitStreamContent(emit, EMISSION_STATE, stream());
+      if (type === "error") await expect(run).rejects.toBe(original);
+      else await expect(run).rejects.toMatchObject({ name: "AbortError" });
+      expect(vi.mocked(emit).mock.calls.map(([event]) => event.type)).toEqual([
+        "reasoning.appended",
+      ]);
+    },
+  );
+
   it.each([
     { providerExecuted: false, sawFinish: false },
     { providerExecuted: false, sawFinish: true },
@@ -26,7 +47,6 @@ describe("emitStreamContent provider completion", () => {
   ])(
     "preserves reducer order and tool outcomes ($providerExecuted, $sawFinish)",
     async ({ providerExecuted, sawFinish }) => {
-      let modelCallCompleted = false;
       let release!: () => void;
       const pause = new Promise<void>((resolve) => {
         release = resolve;
@@ -61,12 +81,11 @@ describe("emitStreamContent provider completion", () => {
         }
         reachedTail();
         await pause;
-        modelCallCompleted = sawFinish;
+        if (!sawFinish) yield { type: "error", error: new IncompleteModelStreamError() };
         yield { finishReason: "stop", type: "finish-step" } as TextStreamPart<ToolSet>;
       }
       const run = emitStreamContent(emit, EMISSION_STATE, stream(), {
         excludedActionToolNames: new Set(),
-        isModelCallComplete: () => modelCallCompleted,
         tools: new Map([
           [
             "web_search",
@@ -85,7 +104,7 @@ describe("emitStreamContent provider completion", () => {
         data: { messageDelta: "A" },
       });
       release();
-      await run;
+      expect((await run).outcome.status).toBe(sawFinish ? "complete" : "incomplete");
       const events = vi.mocked(emit).mock.calls.map(([event]) => event);
       expect(
         events
@@ -118,7 +137,6 @@ describe("emitStreamContent provider completion", () => {
   it.each([false, true])(
     "streams initial deltas but holds the tail at the first completion until provider finish (%s)",
     async (sawFinish) => {
-      let modelCallCompleted = false;
       let release!: () => void;
       const pause = new Promise<void>((resolve) => {
         release = resolve;
@@ -128,13 +146,12 @@ describe("emitStreamContent provider completion", () => {
         yield { id: "reasoning", text: "Thinking", type: "reasoning-delta" };
         yield { id: "answer", text: "Partial answer", type: "text-delta" };
         await pause;
-        modelCallCompleted = sawFinish;
+        if (!sawFinish) yield { type: "error", error: new IncompleteModelStreamError() };
         // The SDK emits this even when the provider never finished.
         yield { finishReason: "other", type: "finish-step" } as TextStreamPart<ToolSet>;
       }
       const run = emitStreamContent(emit, EMISSION_STATE, stream(), {
         excludedActionToolNames: new Set(),
-        isModelCallComplete: () => modelCallCompleted,
         tools: new Map(),
       });
       await vi.waitFor(() => {
@@ -146,7 +163,7 @@ describe("emitStreamContent provider completion", () => {
         "reasoning.appended",
       ]);
       release();
-      await run;
+      expect((await run).outcome.status).toBe(sawFinish ? "complete" : "incomplete");
       const completions = vi
         .mocked(emit)
         .mock.calls.map(([event]) => event.type)

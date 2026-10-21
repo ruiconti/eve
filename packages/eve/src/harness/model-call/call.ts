@@ -17,10 +17,8 @@ import {
   moveToolResultFilesToUserMessages,
 } from "#harness/attachment-staging.js";
 import { emitStreamContent } from "#harness/emission.js";
-import {
-  completedToolMessages,
-  IncompleteModelStreamError,
-} from "#harness/incomplete-model-stream.js";
+import { completedToolMessages } from "#harness/incomplete-model-stream.js";
+import { withModelStreamIntegrity } from "#harness/model-call/stream-integrity.js";
 import { toEntryStep, toEntryStream, toEntryTelemetry } from "#harness/execute-call.js";
 import { REPLY_TOOL_NAME } from "#protocol/reply-tool.js";
 import type { GenerationSteering } from "#harness/generation-steering.js";
@@ -354,17 +352,17 @@ export class ModelCaller {
       session: step.session,
       startStep: options.suppressStepStartedEmission === true ? undefined : this.input.startStep,
     });
-    let modelCallCompleted = false;
     const settings = {
       headers: this.attributionHeaders,
       instructions,
-      model: withGatewayTraceContext(
-        model,
-        this.profile,
-        this.step.instrumentation?.gatewayTraceContextHeaders,
+      model: withModelStreamIntegrity(
+        withGatewayTraceContext(
+          model,
+          this.profile,
+          this.step.instrumentation?.gatewayTraceContextHeaders,
+        ),
       ),
       onLanguageModelCallEnd: (event: LanguageModelCallEndEvent) => {
-        modelCallCompleted = true;
         if (generation.interrupted) return;
         this.interruptedUsage = extractTokenUsageDelta({
           costUsd: extractGatewayCostUsd(event.providerMetadata),
@@ -404,7 +402,6 @@ export class ModelCaller {
         callMessages,
         hooks.stepResult,
         unsettledActionToolNames,
-        () => modelCallCompleted,
       );
       await attempt?.complete();
       return result;
@@ -427,7 +424,6 @@ export class ModelCaller {
     messages: ModelMessage[],
     stepResultPromise: Promise<HarnessStepResult>,
     unsettledActionToolNames: Map<string, string>,
-    isModelCallComplete: () => boolean,
   ): Promise<HarnessStepResult> {
     const { step } = this;
     const { catalog, generation } = this.input;
@@ -439,6 +435,7 @@ export class ModelCaller {
       invalidInputToolCallIds,
       inlineAuthorizationResults,
       trailingInlineToolResultParts,
+      outcome,
     } = await emitStreamContent(
       step.publish,
       step.position(),
@@ -449,7 +446,6 @@ export class ModelCaller {
       {
         excludedActionToolNames,
         hidesHeldText: this.input.hidesHeldText && workingTaskIds(step.session).length > 0,
-        isModelCallComplete,
         tools: catalog,
         unsettledActionToolNames,
       },
@@ -460,9 +456,7 @@ export class ModelCaller {
       ...(await Promise.all([stepResultPromise, streamResult.responseMessages])),
       catalog.resolve,
     );
-    // The SDK synthesizes a step at EOF, even without a provider finish chunk.
-    // A real provider finish with reason "other" is still complete.
-    if (!isModelCallComplete()) {
+    if (outcome.status === "incomplete") {
       const completedMessages = completedToolMessages(
         appendMissingToolResultMessages({
           append: trailingInlineToolResultParts,
@@ -478,7 +472,7 @@ export class ModelCaller {
         };
         step.ctx?.set(HistoryStateKey, this.request.historyState);
       }
-      throw new IncompleteModelStreamError();
+      throw outcome.error;
     }
     assertUsableResponse(stepResult, accumulatedResponseMessages, {
       allowEmptyStop: !step.hasDelegatedCaller,

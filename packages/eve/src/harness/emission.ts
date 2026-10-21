@@ -42,6 +42,7 @@ import {
 import { projectResultPresentation, projectDeltaPresentation } from "#harness/tool-presentation.js";
 import { createProviderStreamActionBatch } from "#harness/stream-actions.js";
 import { normalizeModelStreamError } from "#harness/model-call/errors.js";
+import { IncompleteModelStreamError } from "#harness/incomplete-model-stream.js";
 import { createOrderedStreamEmitter } from "#harness/ordered-stream-emitter.js";
 import { interruptStreamOnFailure } from "#harness/interruptible-stream.js";
 import { isInlineAuthorizationToolResult } from "#harness/inline-tool-authorization.js";
@@ -56,6 +57,9 @@ import { normalizeAssistantStepFinishReason } from "#harness/finish-reason.js";
  * authorization results also route back to the park detector.
  */
 interface EmittedStreamContent {
+  readonly outcome:
+    | { readonly status: "complete" }
+    | { readonly status: "incomplete"; readonly error: IncompleteModelStreamError };
   readonly emittedActionCallIds: ReadonlySet<string>;
   readonly handledInlineToolResultCallIds: ReadonlySet<string>;
   readonly invalidInputToolCallIds: ReadonlySet<string>;
@@ -65,8 +69,6 @@ interface EmittedStreamContent {
 
 interface StreamActionEmissionOptions {
   readonly excludedActionToolNames: ReadonlySet<string>;
-  /** Defer deliverable completions until the provider, not just the SDK step, finishes. */
-  readonly isModelCallComplete?: () => boolean;
   /**
    * A child's or schedule's turn is held while its tasks work, so a text step
    * can't end it: the step reports `"tool-calls"` and channels don't post it
@@ -98,8 +100,8 @@ export async function emitStreamContent(
     // overtake that boundary, including deltas for a different segment.
     if (
       deferred.length > 0 ||
-      (options?.isModelCallComplete?.() === false &&
-        (event.type === "message.completed" || event.type === "reasoning.completed"))
+      event.type === "message.completed" ||
+      event.type === "reasoning.completed"
     ) {
       deferred.push(event);
       return;
@@ -115,7 +117,7 @@ export async function emitStreamContent(
     },
     state,
   });
-  let streamConsumed = false;
+  let completed = false;
   try {
     const result = await consumeStreamContent(
       emitContent,
@@ -124,11 +126,10 @@ export async function emitStreamContent(
       providerActionBatch,
       options,
     );
-    streamConsumed = true;
+    completed = result.outcome.status === "complete";
     return result;
   } finally {
     try {
-      const completed = streamConsumed && options?.isModelCallComplete?.() === true;
       for (const event of deferred) {
         // On failure discard unconfirmed content, but do not hide tool work
         // that already happened. Preserve the relative order of those events.
@@ -355,7 +356,9 @@ async function consumeStreamContent(
   };
 
   for await (const part of fullStream) {
-    if (streamError !== undefined) {
+    // The SDK may settle in-flight tools after the provider's incomplete event.
+    // Keep consuming their outcomes, but never let a synthesized finish erase it.
+    if (streamError !== undefined && !(streamError instanceof IncompleteModelStreamError)) {
       continue;
     }
 
@@ -520,6 +523,16 @@ async function consumeStreamContent(
 
   await providerActionBatch.flush();
 
+  const content = {
+    emittedActionCallIds,
+    handledInlineToolResultCallIds,
+    invalidInputToolCallIds,
+    inlineAuthorizationResults,
+    trailingInlineToolResultParts,
+  };
+  if (streamError instanceof IncompleteModelStreamError) {
+    return { ...content, outcome: { status: "incomplete", error: streamError } };
+  }
   if (streamError !== undefined) {
     throw streamError;
   }
@@ -547,11 +560,5 @@ async function consumeStreamContent(
     );
   }
 
-  return {
-    emittedActionCallIds,
-    handledInlineToolResultCallIds,
-    invalidInputToolCallIds,
-    inlineAuthorizationResults,
-    trailingInlineToolResultParts,
-  };
+  return { ...content, outcome: { status: "complete" } };
 }

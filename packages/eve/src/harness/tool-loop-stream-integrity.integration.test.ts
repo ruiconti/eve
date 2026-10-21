@@ -119,7 +119,7 @@ describe("provider stream integrity with the real SDK", () => {
     },
   );
 
-  it.each(["text", "reasoning-only", "reasoning-and-text", "text-and-tool"])(
+  it.each(["empty", "text", "reasoning-only", "reasoning-and-text", "text-and-tool"])(
     "does not commit or deliver a truncated %s stream",
     async (shape) => {
       const reasoning: StreamPart[] = [
@@ -135,7 +135,7 @@ describe("provider stream integrity with the real SDK", () => {
             : shape === "text-and-tool"
               ? [...text, { ...call, input: "{}" } satisfies StreamPart]
               : text;
-      const { run, events, doStream } = harness(parts);
+      const { run, events, doStream } = harness(shape === "empty" ? [] : parts);
       const result = await run(session(), { message: "Answer" });
       expect(result.next).toBeNull();
       expect(result.session.history).toEqual([]);
@@ -144,7 +144,7 @@ describe("provider stream integrity with the real SDK", () => {
         events.some(
           (event) => event.type === "message.appended" || event.type === "reasoning.appended",
         ),
-      ).toBe(true);
+      ).toBe(shape !== "empty");
       expectIncomplete(events);
     },
   );
@@ -187,6 +187,43 @@ describe("provider stream integrity with the real SDK", () => {
     expect(typeof result.next).toBe("function");
     expect(JSON.stringify(result.session.history)).toContain('"saved":true');
     expect(events.some((event) => event.type === "step.failed")).toBe(false);
+  });
+
+  it("preserves genuine provider tool results through SDK finalization after incomplete EOF", async () => {
+    const { run, execute, doStream, events } = harness([
+      ...text,
+      { ...call, input: "{}", providerExecuted: true },
+      {
+        type: "tool-result",
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+        result: { saved: true },
+      },
+      { ...call, toolCallId: "unanswered", input: "{}", providerExecuted: true },
+    ]);
+    const result = await run(session(), { message: "Do work" });
+    expect(doStream).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    const content = result.session.history.flatMap<unknown>((message) =>
+      Array.isArray(message.content) ? message.content : [],
+    );
+    expect(content).toEqual([
+      expect.objectContaining({ type: "tool-call", toolCallId: call.toolCallId }),
+      expect.objectContaining({
+        type: "tool-result",
+        toolCallId: call.toolCallId,
+        output: { type: "json", value: { saved: true } },
+      }),
+    ]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "action.result",
+        data: expect.objectContaining({
+          result: expect.objectContaining({ callId: call.toolCallId }),
+        }),
+      }),
+    );
+    expectIncomplete(events);
   });
 
   it.each([false, true])(
