@@ -4,6 +4,10 @@ import type {
 } from "#compiled/@standard-schema/spec/index.js";
 import type { ToolApproval } from "#approval/definition.js";
 import type { MessageResult, SendTurnOptions } from "#client/types.js";
+import type {
+  AgentModelOptionsDefinition,
+  AgentReasoningDefinition,
+} from "#shared/agent-definition.js";
 import type { JsonObject } from "#shared/json.js";
 import {
   stampToolDefinition,
@@ -25,17 +29,32 @@ export interface WorkflowAgentMetadata {
   readonly description: string;
 }
 
+/** A serializable model selection for a local `ctx.agent` session. */
+export type AgentSessionModelSelection =
+  | string
+  | {
+      readonly model: string;
+      readonly modelContextWindowTokens?: number;
+      readonly modelOptions?: AgentModelOptionsDefinition;
+      readonly reasoning?: AgentReasoningDefinition;
+    };
+
+/** Options that bind to a `ctx.agent` session when it opens. */
+export interface AgentSessionOptions {
+  /** Override the model for every turn in this local agent session. */
+  readonly model?: AgentSessionModelSelection;
+}
+
 /**
  * Context capabilities available inside an authored `"use step"` helper.
  *
  * `getSandbox()` opens the sandbox of the session that made the call, the
- * same sandbox its turns use, on any sandbox provider. If the session has not
- * opened its sandbox yet, the first `getSandbox()` asks the session to open
- * it and the step runs again from the start, so work before that call can
- * repeat. The step does not own the sandbox: eve releases the step's handle
- * when the step ends and never stops or deletes the sandbox for it, and
- * `stop()` and `delete()` throw. Steps can retry, so make sandbox writes safe
- * to repeat.
+ * same sandbox its turns use. If the session has not opened it yet, the step
+ * creates it with the session's sandbox definition, so make that definition
+ * safe to run again. The step does not own the sandbox: eve lets go of the
+ * step's handle when the step ends and never stops or deletes the sandbox for
+ * it, and `stop()` and `delete()` throw. The session deletes it when the
+ * session ends. Steps can retry, so make sandbox writes safe to repeat.
  */
 export type WorkflowStepToolContext = Pick<
   ToolContext,
@@ -100,7 +119,7 @@ export type WorkflowSharedContext = Pick<
    * Returns a new session with the agent of this invocation name. Nothing
    * starts until the first `send`.
    */
-  agent(name: string): AgentSession;
+  agent(name: string, options?: AgentSessionOptions): AgentSession;
   /** Metadata for agents callable by this workflow, including hidden agents. */
   agents: Readonly<Record<string, WorkflowAgentMetadata>>;
   /**

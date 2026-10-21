@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
-import { hydrateWorkflowArguments } from "@workflow/core/serialization";
+import { cancelRun, getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
+import { hydrateStepReturnValue, hydrateWorkflowArguments } from "@workflow/core/serialization";
 import { createChannelAddress } from "#channel/channel-address.js";
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
@@ -674,6 +674,50 @@ describe("workflowEntry integration", () => {
     });
   });
 
+  it("keeps a session open when its timer fires within the idle window of its last turn", async () => {
+    const runtime = await createTestRuntime({ agent: { name: "workflow-entry-idle-timeout" } });
+
+    await runtime.run(async () => {
+      const run = await startSessionOwner(workflowEntry, [
+        {
+          kind: "initial",
+          ownerDeploymentId: "dpl_inline",
+          input: { message: "hello there" },
+          serializedContext: buildSerializedContext({ channelKind: "http" }),
+          sessionTimeoutMs: 60_000,
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+      try {
+        expect((await stream.nextTurn()).at(-1)?.type).toBe("session.waiting");
+        let armedAtCreation: SessionTimer | undefined;
+        await vi.waitFor(async () => {
+          [armedAtCreation] = await readSessionTimers(run.runId);
+          expect(armedAtCreation).toBeDefined();
+        });
+
+        // Stand in for the creation timer firing early: end its run, then deliver its signal.
+        await cancelRun(await getWorld(), armedAtCreation!.runId);
+        await resumeHook(sessionInboxHookToken(sessionCommandHookToken(run.runId)), {
+          kind: "session-timeout",
+          ownerRunId: run.runId,
+        });
+
+        let timers: SessionTimer[] = [];
+        await vi.waitFor(async () => {
+          timers = await readSessionTimers(run.runId);
+          expect(timers).toHaveLength(2);
+        });
+        // The first turn moved the deadline, so the replacement timer targets a later one.
+        expect(timers[1]!.deadline.getTime()).toBeGreaterThan(armedAtCreation!.deadline.getTime());
+        await expect(run.status).resolves.toBe("running");
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
   it("completes an expired conversation and lets its channel start a fresh session", async () => {
     const runtime = await createTestRuntime({ agent: { name: "workflow-entry-timeout" } });
     const continuationToken = "http:workflow-entry-timeout";
@@ -1217,7 +1261,7 @@ describe("workflowEntry integration", () => {
     await withHeldApprovalRun(
       {
         agent: {
-          limits: { maxInputTokensPerSession: 1 },
+          limits: { sessionUsage: ({ window }) => window.inputTokens >= 1 },
           name: "workflow-entry-steer-held-limit",
         },
         auth: ALICE,
@@ -1804,4 +1848,28 @@ async function resetAndRelease(run: HeldApprovalRun["run"]): Promise<void> {
     "reset",
   );
   await withTimeout(run.returnValue, "session release");
+}
+
+interface SessionTimer {
+  readonly deadline: Date;
+  readonly runId: string;
+}
+
+/** Timers an owner armed, oldest first, with the deadline each one sleeps until. */
+async function readSessionTimers(ownerRunId: string): Promise<SessionTimer[]> {
+  const world = await getWorld();
+  const steps = await world.steps.list({ runId: ownerRunId, resolveData: "all" });
+  const timers: SessionTimer[] = [];
+  for (const step of steps.data) {
+    if (!step.stepName.endsWith("//startSessionTimeoutStep") || step.output === undefined) continue;
+    const { runId } = (await hydrateStepReturnValue(step.output, ownerRunId, undefined)) as {
+      runId: string;
+    };
+    const run = await world.runs.get(runId);
+    const [input] = (await hydrateWorkflowArguments(run.input, runId, undefined)) as [
+      { deadline: Date },
+    ];
+    timers.push({ deadline: input.deadline, runId });
+  }
+  return timers.sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
 }

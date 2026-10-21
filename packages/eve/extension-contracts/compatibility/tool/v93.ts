@@ -1,26 +1,10 @@
-// Epoch 93 of the tool capability: the authoring contract of epoch 92 still compiles.
-import { defineWorkflowTool, type WorkflowStepToolContext } from "#public/tools/index.js";
+import { z } from "zod";
+import { defineTool } from "#public/tools/index.js";
 
-// Step helpers typed with the epoch 93 context still accept the workflow context.
-async function readIssue(ctx: WorkflowStepToolContext, issue: string) {
-  "use step";
-  const { token } = await ctx.getToken({
-    principalType: "app",
-    getToken: async () => ({ token: "service-credential" }),
-  });
-  return { issue, authorized: token.length > 0, session: ctx.session.id };
-}
-
-export default defineWorkflowTool({
-  description: "Read an issue from the issue service.",
-  inputSchema: {
-    type: "object",
-    properties: { issue: { type: "string" } },
-    required: ["issue"],
-    additionalProperties: false,
-  },
-  async execute(input: { issue: string }, ctx) {
-    "use workflow";
-    return await readIssue(ctx, input.issue);
-  },
+// Epoch 93 had no `history` option or `history.imported` event; epoch 94 adds both, which is additive.
+export default defineTool({
+  description: "Report the authenticated caller.",
+  inputSchema: z.object({}),
+  outputSchema: z.object({ principalId: z.string().nullable() }),
+  execute: (_input, ctx) => ({ principalId: ctx.session.auth.current?.principalId ?? null }),
 });

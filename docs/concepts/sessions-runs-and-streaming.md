@@ -21,13 +21,13 @@ whichever session currently owns a platform conversation, such as a Slack thread
 That identity stays behind the channel boundary and is never accepted or returned
 by the eve HTTP session API. See [Custom channels](../channels/custom#channel-operations-and-session-handles).
 
-Sessions last 30 days by default; configure `limits.sessionTimeoutMs` in
-`agent.ts`, or set it to `false` to disable the deadline. A successful deployment
-handoff or legacy-session import restarts the original configured duration.
-Ordinary messages, compaction handoffs, and process restarts keep the existing deadline. At expiration, eve
-lets an active turn settle, emits `session.completed`, and releases the
-session's continuation addresses so the next qualifying channel message starts fresh. Stored
-session data is not deleted. See [Agent config](../agent-config#runtime-limits).
+A session completes after 30 idle days by default; configure
+`limits.sessionTimeoutMs` in `agent.ts`, or set it to `false` to disable the
+timeout. The idle window restarts each time a turn settles, and a session never
+expires while a turn is open. At expiration, eve emits `session.completed` and
+releases the session's continuation addresses so the next qualifying channel
+message starts fresh. Stored session data is not deleted. See
+[Agent config](../agent-config#runtime-limits).
 
 React, Vue, and Svelte apps reach for [`useEveAgent()`](../guides/frontend/overview) instead of calling these routes by hand. Next.js and Nuxt apps can proxy them to the eve runtime from the same origin.
 
@@ -70,6 +70,7 @@ The stream is newline-delimited JSON (NDJSON), one event per line:
 | Event                     | Meaning                                                                                                                                                                                                        |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session.started`         | A durable session was created; carries `trace` when the runtime is traced, and `predecessor` when the session [replaced a stranded one](./execution-model-and-durability#what-a-replacement-session-receives). |
+| `history.imported`        | A delivery added prior conversation with `history`; carries each message's `role`, `content`, and optional `id`. Precedes that delivery's `message.received` in the same turn.                                 |
 | `turn.started`            | A new turn began; carries the active `trace` when the runtime is traced.                                                                                                                                       |
 | `message.received`        | Input reached a turn; carries flattened text plus structured text/file parts.                                                                                                                                  |
 | `step.started`            | A model step began.                                                                                                                                                                                            |
@@ -343,7 +344,7 @@ Every stream event runs four steps, in this order:
 3. **Hooks**: authored [hooks](../guides/hooks) subscribed to the event fire.
 4. **Dynamic resolvers**: [dynamic](../guides/dynamic-capabilities) tool, skill, and instruction resolvers fire, and `ctx.channel.metadata` already holds the freshly projected metadata from step 2.
 
-The order is structural, not incidental. By the time a resolver or hook reads channel metadata, the channel has already updated its state and the projection is current.
+The order is structural, not incidental. By the time a dynamic resolver reads `ctx.channel.metadata`, the channel has already updated its state and the projection is current.
 
 ## What to read next
 
