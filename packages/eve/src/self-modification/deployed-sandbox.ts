@@ -1,6 +1,5 @@
 import { defineSandbox } from "#public/definitions/sandbox.js";
 import { JustBashSandbox } from "#sandbox/providers/just-bash.js";
-import { MicrosandboxSandbox } from "#sandbox/providers/microsandbox.js";
 import { SANDBOX_PROVIDER_PROBES, type DefaultSandboxProbes } from "#sandbox/providers/default.js";
 import { VercelSandbox } from "#sandbox/providers/vercel.js";
 import { bindSandboxEnvironment, type SandboxSelector } from "#shared/sandbox-environment.js";
@@ -15,10 +14,7 @@ import {
   type DeployedSelfModificationConfig,
 } from "./remote/config.js";
 
-type Probes = Pick<DefaultSandboxProbes, "isDeployedOnVercel" | "isMicrosandboxSupported">;
-type DeployedSelfModificationEnvironment =
-  | ReturnType<typeof MicrosandboxSandbox.environment>
-  | ReturnType<typeof VercelSandbox.environment>;
+type Probes = Pick<DefaultSandboxProbes, "isDeployedOnVercel">;
 
 /**
  * Defines the deployed child's sandbox. During `eve dev` the deployed child is never
@@ -75,14 +71,11 @@ export function defineDeployedSelfModificationSandbox(
 
 export function selectDeployedSelfModificationEnvironment(
   probes: Probes,
-): DeployedSelfModificationEnvironment {
+): ReturnType<typeof VercelSandbox.environment> {
   if (probes.isDeployedOnVercel()) {
     return VercelSandbox.environment();
   }
-  if (probes.isMicrosandboxSupported()) {
-    return MicrosandboxSandbox.environment();
-  }
   throw new Error(
-    "Deployed self-modification requires runtime credential transforms. No supported provider is available. Use Vercel Sandbox or microsandbox on a supported self-hosted system.",
+    "Deployed self-modification requires Vercel Sandbox, which provides the runtime credential transforms that keep the GitHub token out of the sandbox. Deploy this agent to Vercel, or remove the eve/self-modification/remote extension mount from self-hosted deployments.",
   );
 }

@@ -49,7 +49,7 @@ See [Workflow Worlds](https://workflow-sdk.dev/worlds) for the underlying Workfl
 
 ## Select a sandbox provider
 
-The default sandbox environment selects Docker, microsandbox, or just-bash according to local availability. You can select one explicitly or implement a custom provider with `defineSandboxProvider()` for your container, virtual machine, or isolation service.
+The default sandbox environment selects Docker when a Docker daemon is reachable and falls back to just-bash otherwise. You can select one explicitly or implement a custom provider with `defineSandboxProvider()` for your container, virtual machine, or isolation service.
 
 Don’t select `VercelSandbox.environment()` unless the self-hosted process should create hosted Vercel sandboxes. See [Sandbox](../../sandbox) for provider configuration and selection order.
 

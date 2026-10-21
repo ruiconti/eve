@@ -21,10 +21,7 @@ import {
 } from "#self-modification/migration.js";
 import type { VercelProjectReference } from "#setup/project-resolution.js";
 import { ensurePackageDependencies } from "#setup/scaffold/index.js";
-import {
-  DEFAULT_CONNECT_PACKAGE_VERSION,
-  DEFAULT_MICROSANDBOX_PACKAGE_VERSION,
-} from "#setup/scaffold/version-tokens.js";
+import { DEFAULT_CONNECT_PACKAGE_VERSION } from "#setup/scaffold/version-tokens.js";
 
 import { describeIntegrationSetupEnvironment } from "../shared/environment.js";
 import { installScaffoldDependencies } from "../shared/scaffold.js";
@@ -46,7 +43,6 @@ const defaultApplyDependencies: SelfModificationApplyDependencies = {
 
 const SELF_MODIFICATION_PRODUCTION_DEPENDENCIES = {
   "@vercel/connect": DEFAULT_CONNECT_PACKAGE_VERSION,
-  microsandbox: DEFAULT_MICROSANDBOX_PACKAGE_VERSION,
 };
 
 type SelfModificationSetupPlan = (
