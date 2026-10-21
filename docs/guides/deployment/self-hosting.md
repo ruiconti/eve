@@ -46,6 +46,29 @@ The package must export a default factory or `createWorld()` function. Read cred
 
 See [Workflow Worlds](https://workflow-sdk.dev/worlds) for the underlying Workflow software development kit (SDK) abstraction.
 
+## Upgrade eve
+
+Pin the exact eve version in `package.json` so upgrades happen only when you choose them. With the default local world, Postgres, or another world without per-deployment routing, serve one world from one eve version at a time. Restarting a process with the same eve version can resume its persisted runs; changing the eve version cannot replay existing session runs on the new version.
+
+Unlike Vercel Workflow, these worlds do not route runs back to the deployment that started them. Before upgrading, let in-flight work finish and plan for existing conversations to start fresh sessions.
+
+### Recover stranded sessions
+
+A session is **stranded** when its owner run was built by another eve version and the current deployment cannot replay it. Its recorded history remains readable, but it cannot process new work. Sessions whose runs recorded no eve version are treated the same way.
+
+Recovery depends on how you address the session:
+
+- **Channel address**, such as a Slack thread: the next ordinary message ends the stranded session and starts one fresh session at the same address, even when messages arrive concurrently. A delivery containing input responses is refused instead, because a fresh session has no matching request. See [custom channel operations](../../channels/custom#channel-operations-and-session-handles).
+- **Session ID**: sends and live streams report `session_stranded`; eve never replaces the session implicitly. Read any history you need with `stream({ follow: false })`, reset the old session, and explicitly create a new one. Clear is refused because it would preserve a session that cannot run. See [the eve HTTP channel](../../channels/eve#start-and-continue-a-session) and [TypeScript client recovery](../client/messages).
+
+A replacement starts with its own ID and state, without the earlier conversation. Automatic channel replacement supplies `ctx.session.predecessor.sessionId` so your instructions can optionally [read the earlier conversation](../session-context#read-a-replaced-sessions-conversation). An explicit reset leaves the next session no predecessor link. Messages accepted before the upgrade are not redelivered.
+
+Reset cannot be undone. It cancels the stranded run without executing its code or its `session.completed` and `session.failed` hooks. It does not undo side effects, stop independent external jobs, or carry interrupted work into a replacement. Rolling back to the original eve version can help only before the session is reset.
+
+A stranded root session keeps its address until a channel message replaces it, an explicit reset ends it, or its [session timeout](../../agent-config#runtime-limits) elapses. With `sessionTimeoutMs: false`, it waits until a message or reset. Stranded subagent sessions and workflow tool runs are cancelled separately when the world next delivers work to them; ending the root session does not find or cancel them. Cancel any remaining runs directly in your Workflow world if needed.
+
+The same version boundary applies in `eve dev`. A previous invocation's session built by the same eve version is not stranded; use [local workflow recovery](../../reference/cli#local-workflow-recovery) to resume it.
+
 ## Select a sandbox provider
 
 The default sandbox environment selects Docker, microsandbox, or just-bash according to local availability. You can select one explicitly or implement a custom provider with `defineSandboxProvider()` for your container, virtual machine, or isolation service.

@@ -124,10 +124,10 @@ const currentSession = await resolveSession(threadId);
 ```
 
 When the session at an address is
-[stranded](../concepts/execution-model-and-durability#stranded-sessions) because another eve version
+[stranded](../guides/deployment/self-hosting#recover-stranded-sessions) because another eve version
 built it, `send()` ends that session and starts a fresh one. The message becomes the fresh
 session's first turn, and the fresh session can read recent text from the earlier conversation;
-see [What a replacement session receives](../concepts/execution-model-and-durability#what-a-replacement-session-receives). Concurrent sends to the same stranded address still
+see [Read a replaced session's conversation](../guides/session-context#read-a-replaced-sessions-conversation). Concurrent sends to the same stranded address still
 produce one fresh session. A `respond()` call, or a `deliver()` that includes input responses,
 carries answers a fresh session has no request for, so it throws `SessionStrandedError` and leaves
 the stranded session in place.
